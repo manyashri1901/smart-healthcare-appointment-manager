@@ -125,4 +125,25 @@ Tokens are stored server-side only. No API route exposes them to clients.
 
 Common actions: `USER_REGISTERED`, `APPOINTMENT_CREATED`,
 `APPOINTMENT_CANCELLED`, `APPOINTMENT_RESCHEDULED`, `SLOT_HOLD_CREATED`,
-`DOCTOR_LEAVE_CREATED`, `CALENDAR_CONNECTED`, `VISIT_COMPLETED`.
+`DOCTOR_LEAVE_CREATED`, `CALENDAR_CONNECTED`, `VISIT_COMPLETED`,
+`WAITLIST_JOINED`, `WAITLIST_NOTIFIED`, `WAITLIST_CLAIMED`,
+`WAITLIST_CLAIM_EXPIRED`, `WAITLIST_CANCELLED`.
+
+## waitlist
+| column | type |
+| --- | --- |
+| id | text PK | uuid |
+| patient_id | text | |
+| doctor_id | text | |
+| requested_start, requested_end | text | ISO-8601 UTC |
+| status | text | `WAITING` / `NOTIFIED` / `BOOKED` / `CANCELLED` / `EXPIRED` |
+| claim_expires_at | text | ISO-8601 UTC (only while `NOTIFIED`) |
+| appointment_id | text | set when the entry is `BOOKED` |
+| created_at | timestamptz | |
+| updated_at | text | |
+
+Partial unique index:
+`UNIQUE(patient_id, doctor_id, requested_start) WHERE status IN ('WAITING','NOTIFIED')`
+guarantees a patient cannot join the same slot's waitlist twice.
+
+Index: `(doctor_id, requested_start, status)` for fast promotion lookups.

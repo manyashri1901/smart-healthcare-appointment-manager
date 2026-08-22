@@ -204,3 +204,88 @@ async def process_due_reminders():
         )
         await queue_email("MEDICATION_REMINDER", patient.get("email") if patient else "", subj, body)
         await r.update_reminder(rem["id"], {"status": "SENT", "sent_at": _iso()})
+
+
+# ---------------------------------------------------------------------------
+# Waitlist promotion
+# ---------------------------------------------------------------------------
+async def _notify_first_eligible_waitlister(doctor_id: str, start: str):
+    """Promote the earliest WAITING waitlister for a freed slot to NOTIFIED.
+
+    Skips any entry whose slot has moved into the past. Notification and
+    Google Calendar events happen out-of-band; failures never abort the
+    promotion.
+    """
+    r = repo()
+    from . import config as _config
+
+    candidates = await r.find_active_waitlist_for_slot(doctor_id, start)
+    for entry in candidates:
+        # skip past slots — the requested time has already elapsed
+        try:
+            if datetime.fromisoformat(entry["requested_start"]) <= _now():
+                await r.update_waitlist(entry["id"], {"status": "EXPIRED", "updated_at": _iso()})
+                continue
+        except Exception:
+            pass
+        claim_expires = (_now() + timedelta(minutes=_config.WAITLIST_CLAIM_MINUTES)).isoformat()
+        promoted = await r.update_waitlist(
+            entry["id"],
+            {"status": "NOTIFIED", "claim_expires_at": claim_expires, "updated_at": _iso()},
+        )
+        if not promoted:
+            continue
+        patient = await r.get_user_by_id(entry["patient_id"])
+        doctor = await r.get_user_by_id(doctor_id)
+        when = entry["requested_start"]
+        await queue_email(
+            "WAITLIST_SLOT_OPEN",
+            patient.get("email") if patient else "",
+            "A PulseCare slot just opened for you",
+            (
+                f"<p>Hi {patient.get('name') if patient else 'there'},</p>"
+                f"<p>A slot with <strong>{doctor.get('name') if doctor else 'your requested doctor'}</strong> "
+                f"has just opened at <strong>{when}</strong>.</p>"
+                f"<p>You have {_config.WAITLIST_CLAIM_MINUTES} minutes to claim it in PulseCare.</p>"
+            ),
+        )
+        await r.audit(
+            {
+                "user_id": entry["patient_id"],
+                "action": "WAITLIST_NOTIFIED",
+                "entity_id": entry["id"],
+                "metadata": {"doctor_id": doctor_id, "start": start},
+                "timestamp": _iso(),
+            }
+        )
+        return promoted
+    return None
+
+
+async def promote_waitlist_for_freed_slot(doctor_id: str, start: str):
+    """Public entry point — always safe to call, never raises."""
+    try:
+        await _notify_first_eligible_waitlister(doctor_id, start)
+    except Exception as e:  # pragma: no cover
+        import logging
+        logging.getLogger("waitlist").warning("promote failed: %s", e)
+
+
+async def process_expired_waitlist():
+    """Background sweep: any NOTIFIED entry whose claim window elapsed is
+    EXPIRED, and the next eligible waiter is promoted."""
+    r = repo()
+    expired = await r.expire_notified_waitlist()
+    for entry in expired:
+        await r.audit(
+            {
+                "user_id": entry["patient_id"],
+                "action": "WAITLIST_CLAIM_EXPIRED",
+                "entity_id": entry["id"],
+                "timestamp": _iso(),
+            }
+        )
+        # promote the next eligible waiter (skip if slot is now occupied)
+        busy = await r.busy_starts(entry["doctor_id"])
+        if entry["requested_start"] not in busy:
+            await promote_waitlist_for_freed_slot(entry["doctor_id"], entry["requested_start"])

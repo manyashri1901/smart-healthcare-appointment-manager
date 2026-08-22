@@ -79,3 +79,13 @@ class RescheduleRequest(BaseModel):
 
 class LeaveRequest(BaseModel):
     date: str
+
+
+class WaitlistJoin(BaseModel):
+    doctor_id: str
+    start: datetime
+    end: datetime
+
+
+class WaitlistClaim(SymptomForm):
+    pass

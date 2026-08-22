@@ -150,3 +150,71 @@ async def test_llm_failure_does_not_block_booking():
         await asyncio.sleep(1.5)
         detail = (await c.get(f"/appointments/{appt_id}")).json()
         assert detail["status"] == "CONFIRMED"  # unaffected by LLM/email
+
+
+@pytest.mark.asyncio
+async def test_waitlist_end_to_end():
+    """Book → duplicate waitlist blocked → cancel → NOTIFIED → claim → BOOKED."""
+    token_a = await _login(*PATIENT)
+    token_b = await _login(*PATIENT_B)
+    async with httpx.AsyncClient(base_url=API, headers={"Authorization": f"Bearer {token_a}"}) as ca:
+        doctors = (await ca.get("/doctors")).json()
+        doctor_id = doctors[0]["id"]
+        date = next_weekday(7)
+        slots = (await ca.get(f"/doctors/{doctor_id}/availability", params={"date": date})).json()
+        if not slots:
+            pytest.skip("no free slots")
+        # pick a slot that isn't already booked
+        slot = slots[-1]
+        hold = await ca.post("/appointments/hold", json={"doctor_id": doctor_id, **slot})
+        if hold.status_code != 200:
+            pytest.skip("hold conflict")
+        confirm = await ca.post(
+            "/appointments/confirm",
+            json={
+                "hold_id": hold.json()["id"],
+                "chief_complaint": "flu",
+                "symptoms": "fever",
+                "symptom_duration": "1 day",
+                "severity": "Mild",
+                "additional_notes": "",
+            },
+        )
+        assert confirm.status_code == 200
+        appt_id = confirm.json()["id"]
+
+    async with httpx.AsyncClient(base_url=API, headers={"Authorization": f"Bearer {token_b}"}) as cb:
+        # B joins waitlist
+        wl = await cb.post("/waitlist", json={"doctor_id": doctor_id, **slot})
+        assert wl.status_code == 200, wl.text
+        wl_id = wl.json()["id"]
+        # Duplicate blocked
+        dup = await cb.post("/waitlist", json={"doctor_id": doctor_id, **slot})
+        assert dup.status_code == 409
+
+    # A cancels — triggers promotion
+    async with httpx.AsyncClient(base_url=API, headers={"Authorization": f"Bearer {token_a}"}) as ca:
+        await ca.patch(f"/appointments/{appt_id}/cancel")
+
+    await asyncio.sleep(1.5)
+
+    async with httpx.AsyncClient(base_url=API, headers={"Authorization": f"Bearer {token_b}"}) as cb:
+        mine = (await cb.get("/waitlist/mine")).json()
+        target = next((x for x in mine if x["id"] == wl_id), None)
+        assert target and target["status"] == "NOTIFIED", target
+        # Claim it
+        claim = await cb.post(
+            f"/waitlist/{wl_id}/claim",
+            json={
+                "chief_complaint": "flu",
+                "symptoms": "fever",
+                "symptom_duration": "1 day",
+                "severity": "Mild",
+                "additional_notes": "",
+            },
+        )
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["status"] == "CONFIRMED"
+        # Waitlist entry now BOOKED
+        mine2 = (await cb.get("/waitlist/mine")).json()
+        assert next(x for x in mine2 if x["id"] == wl_id)["status"] == "BOOKED"

@@ -11,6 +11,7 @@ from app.jobs import build_scheduler
 from app.seed import seed
 from app.routes import auth, doctors, appointments, admin
 from app.routes import calendar as calendar_routes
+from app.routes import waitlist as waitlist_routes
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("pulsecare")
@@ -60,6 +61,7 @@ api.include_router(doctors.router)
 api.include_router(appointments.router)
 api.include_router(admin.router)
 api.include_router(calendar_routes.router)
+api.include_router(waitlist_routes.router)
 
 app.include_router(api)
 

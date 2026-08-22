@@ -34,4 +34,11 @@ def build_scheduler() -> AsyncIOScheduler:
         except Exception as e:  # pragma: no cover
             log.warning("process_reminders failed: %s", e)
 
+    @scheduler.scheduled_job("interval", seconds=30, id="process_expired_waitlist", max_instances=1)
+    async def process_expired_waitlist():
+        try:
+            await services.process_expired_waitlist()
+        except Exception as e:  # pragma: no cover
+            log.warning("process_expired_waitlist failed: %s", e)
+
     return scheduler

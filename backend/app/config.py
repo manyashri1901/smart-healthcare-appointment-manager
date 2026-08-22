@@ -43,6 +43,9 @@ GOOGLE_REDIRECT_URI = env("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/api/calendar/go
 # Slot hold TTL
 SLOT_HOLD_MINUTES = int(env("SLOT_HOLD_MINUTES", "5") or 5)
 
+# Waitlist claim window — how long a notified patient has to claim a freed slot.
+WAITLIST_CLAIM_MINUTES = int(env("WAITLIST_CLAIM_MINUTES", "10") or 10)
+
 # Notification retry
 NOTIFICATION_MAX_RETRIES = int(env("NOTIFICATION_MAX_RETRIES", "3") or 3)
 

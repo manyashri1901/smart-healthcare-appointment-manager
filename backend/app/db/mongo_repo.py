@@ -47,6 +47,14 @@ class MongoRepo:
         await self.db.holds.create_index("expires_at")
         await self.db.notifications.create_index([("status", 1), ("next_retry_at", 1)])
         await self.db.medication_reminders.create_index([("status", 1), ("scheduled_at", 1)])
+        # Waitlist: prevent duplicate entries for the same (patient, doctor, start)
+        await self.db.waitlist.create_index(
+            [("patient_id", 1), ("doctor_id", 1), ("requested_start", 1)],
+            unique=True,
+            partialFilterExpression={"status": {"$in": ["WAITING", "NOTIFIED"]}},
+            name="unique_active_waitlist",
+        )
+        await self.db.waitlist.create_index([("doctor_id", 1), ("requested_start", 1), ("status", 1)])
 
     async def close(self):
         self.client.close()
@@ -262,4 +270,53 @@ class MongoRepo:
             "doctors": await self.db.users.count_documents({"role": "DOCTOR"}),
             "appointments": await self.db.appointments.count_documents({}),
             "failed_integrations": await self.db.notifications.count_documents({"status": "FAILED"}),
+            "waitlist_active": await self.db.waitlist.count_documents({"status": {"$in": ["WAITING", "NOTIFIED"]}}),
         }
+
+    # -------------------------------------------------------------- waitlist
+    async def create_waitlist_entry(self, entry: dict) -> Optional[dict]:
+        try:
+            await self.db.waitlist.insert_one(entry)
+            return _clean(entry)
+        except Exception:
+            return None
+
+    async def get_waitlist_entry(self, entry_id: str) -> Optional[dict]:
+        return _clean(await self.db.waitlist.find_one({"id": entry_id}))
+
+    async def find_active_waitlist_for_slot(self, doctor_id: str, start: str) -> list[dict]:
+        return [
+            _clean(x)
+            async for x in self.db.waitlist.find(
+                {"doctor_id": doctor_id, "requested_start": start, "status": "WAITING"}
+            ).sort("created_at", 1)
+        ]
+
+    async def update_waitlist(self, entry_id: str, patch: dict) -> Optional[dict]:
+        await self.db.waitlist.update_one({"id": entry_id}, {"$set": patch})
+        return await self.get_waitlist_entry(entry_id)
+
+    async def list_waitlist_for_patient(self, patient_id: str) -> list[dict]:
+        return [
+            _clean(x)
+            async for x in self.db.waitlist.find({"patient_id": patient_id}).sort("created_at", -1)
+        ]
+
+    async def list_all_waitlist(self, limit: int = 200) -> list[dict]:
+        return [_clean(x) async for x in self.db.waitlist.find({}).sort("created_at", -1).limit(limit)]
+
+    async def expire_notified_waitlist(self) -> list[dict]:
+        """Return entries whose NOTIFIED claim window has expired, then flip them."""
+        now_iso = _now_iso()
+        expired = [
+            _clean(x)
+            async for x in self.db.waitlist.find(
+                {"status": "NOTIFIED", "claim_expires_at": {"$lte": now_iso}}
+            )
+        ]
+        if expired:
+            ids = [e["id"] for e in expired]
+            await self.db.waitlist.update_many(
+                {"id": {"$in": ids}}, {"$set": {"status": "EXPIRED", "updated_at": now_iso}}
+            )
+        return expired

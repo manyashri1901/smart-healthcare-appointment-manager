@@ -100,9 +100,9 @@ function AuthScreen({ onSuccess }) {
 function Dashboard({ session, logout }) {
   const role = session.user.role;
   const navByRole = {
-    ADMIN: [["overview", "Overview"], ["doctors", "Doctors"], ["appointments", "Appointments"], ["notifications", "Activity"]],
+    ADMIN: [["overview", "Overview"], ["doctors", "Doctors"], ["appointments", "Appointments"], ["waitlist", "Waitlist"], ["notifications", "Activity"]],
     DOCTOR: [["overview", "Overview"], ["today", "My schedule"], ["settings", "Settings"]],
-    PATIENT: [["overview", "Overview"], ["find-care", "Find care"], ["appointments", "Appointments"], ["medications", "Medications"], ["settings", "Settings"]],
+    PATIENT: [["overview", "Overview"], ["find-care", "Find care"], ["appointments", "Appointments"], ["waitlist", "Waitlist"], ["medications", "Medications"], ["settings", "Settings"]],
   }[role];
   const [tab, setTab] = useState(navByRole[0][0]);
   return (
@@ -152,6 +152,7 @@ const navIcon = (n) => {
     appointments: <CalendarDays size={17} />, medications: <Pill size={17} />,
     settings: <ShieldCheck size={17} />, today: <CalendarClock size={17} />,
     doctors: <Stethoscope size={17} />, notifications: <Bell size={17} />,
+    waitlist: <Timer size={17} />,
   };
   return map[n] || <Users size={17} />;
 };
@@ -201,6 +202,7 @@ function PatientPortal({ session, tab, setTab }) {
       <WelcomeBand role="PATIENT" tab={tab} />
       {tab === "find-care" && <BookingFlow doctors={doctors} headers={headers} onBooked={refresh} />}
       {tab === "medications" && <MedicationsView headers={headers} appointments={appointments} />}
+      {tab === "waitlist" && <PatientWaitlistView headers={headers} />}
       {tab === "settings" && <CalendarSettings headers={headers} />}
       {(tab === "overview" || tab === "appointments") && (
         selected ? (
@@ -265,6 +267,7 @@ function BookingFlow({ doctors, headers, onBooked }) {
   const [slots, setSlots] = useState([]);
   const [hold, setHold] = useState(null);
   const [message, setMessage] = useState("");
+  const [waitlistPrompt, setWaitlistPrompt] = useState(null);
   const [symptoms, setSymptoms] = useState({
     chief_complaint: "", symptoms: "", symptom_duration: "", severity: "Medium", additional_notes: "",
   });
@@ -278,15 +281,30 @@ function BookingFlow({ doctors, headers, onBooked }) {
 
   const holdSlot = async (slot) => {
     setMessage("");
+    setWaitlistPrompt(null);
     try {
       const r = await client.post("/appointments/hold", { doctor_id: doctor.id, ...slot }, headers);
       setHold(r.data);
       setMessage("Slot held for 5 minutes. Complete the symptoms form to confirm.");
     } catch (e) {
-      setMessage(e.response?.data?.detail || "This slot is no longer available.");
+      const detail = e.response?.data?.detail || "This slot is no longer available.";
+      setMessage(detail);
+      if (e.response?.status === 409) {
+        setWaitlistPrompt(slot);
+      }
       // refresh slots on conflict
       const r = await client.get(`/doctors/${doctor.id}/availability`, { ...headers, params: { date } });
       setSlots(r.data);
+    }
+  };
+
+  const joinWaitlist = async () => {
+    try {
+      await client.post("/waitlist", { doctor_id: doctor.id, ...waitlistPrompt }, headers);
+      setMessage("You're on the waitlist. We'll email you if this slot opens up.");
+      setWaitlistPrompt(null);
+    } catch (e) {
+      setMessage(e.response?.data?.detail || "Could not join the waitlist.");
     }
   };
 
@@ -375,6 +393,16 @@ function BookingFlow({ doctors, headers, onBooked }) {
             </>
           )}
           {message && <div className="success" data-testid="booking-message">{message}</div>}
+          {waitlistPrompt && (
+            <div className="booking-panel" style={{ borderColor: "#f1a43b", padding: 16 }}>
+              <strong>Join the waitlist for {new Date(waitlistPrompt.start).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}?</strong>
+              <p className="muted">We'll notify you by email as soon as this slot opens up. You'll then have a short window to claim it.</p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="primary" data-testid="waitlist-join-button" onClick={joinWaitlist}>Yes, add me</button>
+                <button className="slot" data-testid="waitlist-decline-button" onClick={() => setWaitlistPrompt(null)}>No thanks</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -694,6 +722,7 @@ function AdminPortal({ session, tab }) {
           </div>
         </section>
       )}
+      {tab === "waitlist" && <AdminWaitlistView headers={headers} />}
       {tab === "notifications" && (
         <section className="content-grid">
           <div className="section-heading"><div><span className="eyebrow teal">ACTIVITY</span><h2>Notifications & background jobs</h2></div></div>
@@ -892,5 +921,134 @@ function SafetyNote() {
       <ShieldCheck size={18} />
       <span>AI-generated summaries are informational and always reviewed by your healthcare professional. They are not a diagnosis or medical advice.</span>
     </div>
+  );
+}
+
+function PatientWaitlistView({ headers }) {
+  const [entries, setEntries] = useState([]);
+  const [message, setMessage] = useState("");
+  const [claiming, setClaiming] = useState(null);
+  const [symptoms, setSymptoms] = useState({
+    chief_complaint: "", symptoms: "", symptom_duration: "", severity: "Medium", additional_notes: "",
+  });
+  const load = () => client.get("/waitlist/mine", headers).then((r) => setEntries(r.data));
+  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
+
+  const cancel = async (id) => {
+    if (!window.confirm("Remove from the waitlist?")) return;
+    await client.delete(`/waitlist/${id}`, headers);
+    load();
+  };
+  const claim = async (e) => {
+    e.preventDefault();
+    try {
+      await client.post(`/waitlist/${claiming.id}/claim`, symptoms, headers);
+      setMessage("Slot claimed! Your appointment is confirmed.");
+      setClaiming(null);
+      load();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || "Could not claim the slot.");
+    }
+  };
+
+  return (
+    <section className="content-grid">
+      <div className="section-heading"><div><span className="eyebrow teal">WAITLIST</span><h2>Your waitlist requests</h2></div></div>
+      {message && <div className="success" data-testid="waitlist-message">{message}</div>}
+      {entries.length ? (
+        <div className="appointment-list">
+          {entries.map((w) => (
+            <div className="appointment" key={w.id} data-testid={`waitlist-${w.id}`}>
+              <div className="appointment-date">
+                <strong>{new Date(w.requested_start).toLocaleDateString([], { day: "2-digit" })}</strong>
+                <span>{new Date(w.requested_start).toLocaleDateString([], { month: "short" })}</span>
+              </div>
+              <div className="appointment-info">
+                <strong>{w.doctor_name}</strong>
+                <span>{new Date(w.requested_start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                {w.status === "NOTIFIED" && <ClaimCountdown expiresAt={w.claim_expires_at} onExpire={load} />}
+              </div>
+              <span className={`status ${w.status.toLowerCase()}`}>{w.status}</span>
+              {w.status === "NOTIFIED" && (
+                <button className="primary" data-testid={`claim-${w.id}`} onClick={() => setClaiming(w)}>
+                  Claim <ArrowRight size={14} />
+                </button>
+              )}
+              {(w.status === "WAITING" || w.status === "NOTIFIED") && (
+                <button className="slot" data-testid={`waitlist-cancel-${w.id}`} onClick={() => cancel(w.id)}>
+                  <Trash2 size={13} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty" data-testid="waitlist-empty">
+          <Timer size={26} /><strong>You're not on any waitlists</strong>
+          <span>When a slot is unavailable, we'll offer to add you to the waitlist automatically.</span>
+        </div>
+      )}
+      {claiming && (
+        <form className="booking-panel symptom-form" onSubmit={claim}>
+          <strong>Claim {new Date(claiming.requested_start).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} with {claiming.doctor_name}</strong>
+          <input required data-testid="claim-chief-complaint" placeholder="Main concern" value={symptoms.chief_complaint} onChange={(e) => setSymptoms({ ...symptoms, chief_complaint: e.target.value })} />
+          <textarea required data-testid="claim-symptoms" placeholder="Describe your symptoms" value={symptoms.symptoms} onChange={(e) => setSymptoms({ ...symptoms, symptoms: e.target.value })} />
+          <input required data-testid="claim-duration" placeholder="Duration" value={symptoms.symptom_duration} onChange={(e) => setSymptoms({ ...symptoms, symptom_duration: e.target.value })} />
+          <label>Severity
+            <select value={symptoms.severity} onChange={(e) => setSymptoms({ ...symptoms, severity: e.target.value })}>
+              <option>Mild</option><option>Moderate</option><option>Severe</option>
+            </select>
+          </label>
+          <button className="primary" data-testid="claim-submit">Confirm claim <ArrowRight size={16} /></button>
+          <button type="button" className="slot" onClick={() => setClaiming(null)}>Cancel</button>
+        </form>
+      )}
+    </section>
+  );
+}
+
+function ClaimCountdown({ expiresAt, onExpire }) {
+  const [left, setLeft] = useState(Math.max(0, new Date(expiresAt) - new Date()));
+  useEffect(() => {
+    const t = setInterval(() => {
+      const d = new Date(expiresAt) - new Date();
+      if (d <= 0) { onExpire(); clearInterval(t); }
+      setLeft(Math.max(0, d));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
+  const min = Math.floor(left / 60000);
+  const sec = Math.floor((left % 60000) / 1000).toString().padStart(2, "0");
+  return <small style={{ color: "var(--teal)", fontWeight: 700 }}>Claim before {min}:{sec}</small>;
+}
+
+function AdminWaitlistView({ headers }) {
+  const [entries, setEntries] = useState([]);
+  useEffect(() => {
+    client.get("/admin/waitlist", headers).then((r) => setEntries(r.data));
+  }, []);
+  return (
+    <section className="content-grid">
+      <div className="section-heading"><div><span className="eyebrow teal">SYSTEM</span><h2>Waitlist ({entries.length})</h2></div></div>
+      {entries.length ? (
+        <div className="appointment-list">
+          {entries.map((w) => (
+            <div className="appointment" key={w.id} data-testid={`admin-waitlist-${w.id}`}>
+              <div className="appointment-date">
+                <strong>{new Date(w.requested_start).toLocaleDateString([], { day: "2-digit" })}</strong>
+                <span>{new Date(w.requested_start).toLocaleDateString([], { month: "short" })}</span>
+              </div>
+              <div className="appointment-info">
+                <strong>{w.patient_name} → {w.doctor_name}</strong>
+                <span>{new Date(w.requested_start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+              </div>
+              <span className={`status ${w.status.toLowerCase()}`}>{w.status}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty"><Timer size={22} /><span>No waitlist entries yet.</span></div>
+      )}
+    </section>
   );
 }

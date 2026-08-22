@@ -466,9 +466,97 @@ class PostgresRepo:
             failed = (
                 await s.execute(select(func.count()).where(m.Notification.status == "FAILED").select_from(m.Notification))
             ).scalar()
+            waitlist_active = (
+                await s.execute(
+                    select(func.count()).where(m.Waitlist.status.in_(["WAITING", "NOTIFIED"])).select_from(m.Waitlist)
+                )
+            ).scalar()
             return {
                 "patients": patients or 0,
                 "doctors": doctors or 0,
                 "appointments": appts or 0,
                 "failed_integrations": failed or 0,
+                "waitlist_active": waitlist_active or 0,
             }
+
+    # -------------------------------------------------------------- waitlist
+    async def create_waitlist_entry(self, entry: dict) -> Optional[dict]:
+        async with self.session() as s:
+            try:
+                row = m.Waitlist(
+                    **{k: entry.get(k) for k in m.Waitlist.__table__.columns.keys() if k in entry}
+                )
+                if not row.created_at:
+                    row.created_at = _now()
+                s.add(row)
+                await s.commit()
+                return _dump(row)
+            except IntegrityError:
+                await s.rollback()
+                return None
+
+    async def get_waitlist_entry(self, entry_id: str) -> Optional[dict]:
+        async with self.session() as s:
+            row = (
+                await s.execute(select(m.Waitlist).where(m.Waitlist.id == entry_id))
+            ).scalar_one_or_none()
+            return _dump(row)
+
+    async def find_active_waitlist_for_slot(self, doctor_id: str, start: str) -> list[dict]:
+        async with self.session() as s:
+            rows = (
+                await s.execute(
+                    select(m.Waitlist)
+                    .where(
+                        m.Waitlist.doctor_id == doctor_id,
+                        m.Waitlist.requested_start == start,
+                        m.Waitlist.status == "WAITING",
+                    )
+                    .order_by(m.Waitlist.created_at.asc())
+                )
+            ).scalars().all()
+            return [_dump(r) for r in rows]
+
+    async def update_waitlist(self, entry_id: str, patch: dict) -> Optional[dict]:
+        async with self.session() as s:
+            await s.execute(update(m.Waitlist).where(m.Waitlist.id == entry_id).values(**patch))
+            await s.commit()
+            return await self.get_waitlist_entry(entry_id)
+
+    async def list_waitlist_for_patient(self, patient_id: str) -> list[dict]:
+        async with self.session() as s:
+            rows = (
+                await s.execute(
+                    select(m.Waitlist)
+                    .where(m.Waitlist.patient_id == patient_id)
+                    .order_by(m.Waitlist.created_at.desc())
+                )
+            ).scalars().all()
+            return [_dump(r) for r in rows]
+
+    async def list_all_waitlist(self, limit: int = 200) -> list[dict]:
+        async with self.session() as s:
+            rows = (
+                await s.execute(select(m.Waitlist).order_by(m.Waitlist.created_at.desc()).limit(limit))
+            ).scalars().all()
+            return [_dump(r) for r in rows]
+
+    async def expire_notified_waitlist(self) -> list[dict]:
+        async with self.session() as s:
+            now_iso = _iso()
+            rows = (
+                await s.execute(
+                    select(m.Waitlist).where(
+                        m.Waitlist.status == "NOTIFIED",
+                        m.Waitlist.claim_expires_at <= now_iso,
+                    )
+                )
+            ).scalars().all()
+            expired = [_dump(r) for r in rows]
+            if expired:
+                ids = [e["id"] for e in expired]
+                await s.execute(
+                    update(m.Waitlist).where(m.Waitlist.id.in_(ids)).values(status="EXPIRED", updated_at=now_iso)
+                )
+                await s.commit()
+            return expired

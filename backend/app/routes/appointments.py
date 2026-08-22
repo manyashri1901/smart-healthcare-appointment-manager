@@ -165,6 +165,7 @@ async def cancel(appointment_id: str, background: BackgroundTasks, user=Depends(
     await r.update_appointment(appointment_id, {"status": "CANCELLED"})
     await r.audit({"user_id": user["id"], "action": "APPOINTMENT_CANCELLED", "entity_id": appointment_id, "timestamp": now().isoformat()})
     background.add_task(services.sync_calendar_cancel, item)
+    background.add_task(services.promote_waitlist_for_freed_slot, item["doctor_id"], item["start"])
     return {"status": "CANCELLED"}
 
 
@@ -188,6 +189,7 @@ async def reschedule(appointment_id: str, data: RescheduleRequest, background: B
     await r.audit({"user_id": user["id"], "action": "APPOINTMENT_RESCHEDULED", "entity_id": created["id"], "timestamp": now().isoformat()})
     background.add_task(services.sync_calendar_cancel, item)
     background.add_task(services.sync_calendar_create, created)
+    background.add_task(services.promote_waitlist_for_freed_slot, item["doctor_id"], item["start"])
     return created
 
 

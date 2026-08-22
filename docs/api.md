@@ -64,6 +64,15 @@ Every route below is prefixed with `/api`. Auth-protected routes require the
 | GET   | `/admin/appointments` | | Admin |
 | GET   | `/admin/notifications` | | Admin |
 | GET   | `/admin/audit` | | Admin |
+| GET   | `/admin/waitlist` | | Admin |
+
+## Waitlist
+| Method | Path | Body | Role | Notes |
+| --- | --- | --- | --- | --- |
+| POST   | `/waitlist` | `{doctor_id, start, end}` | Patient | 409 if duplicate active entry |
+| GET    | `/waitlist/mine` | | Patient | Includes `doctor_name`, `status`, `claim_expires_at` |
+| DELETE | `/waitlist/{id}` | | Patient | Allowed for `WAITING` or `NOTIFIED` entries |
+| POST   | `/waitlist/{id}/claim` | `{chief_complaint, symptoms, symptom_duration, severity, additional_notes}` | Patient | Must be `NOTIFIED`; consumes the promotion window |
 
 ## Auth & error format
 

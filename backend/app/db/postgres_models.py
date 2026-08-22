@@ -147,3 +147,26 @@ class Audit(Base):
     entity_id: Mapped[str | None] = mapped_column(String)
     metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON)
     timestamp: Mapped[str] = mapped_column(String)
+
+
+class Waitlist(Base):
+    __tablename__ = "waitlist"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    patient_id: Mapped[str] = mapped_column(String, index=True)
+    doctor_id: Mapped[str] = mapped_column(String, index=True)
+    requested_start: Mapped[str] = mapped_column(String, index=True)
+    requested_end: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, index=True)  # WAITING | NOTIFIED | BOOKED | CANCELLED | EXPIRED
+    claim_expires_at: Mapped[str | None] = mapped_column(String)
+    appointment_id: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[str | None] = mapped_column(String)
+    __table_args__ = (
+        # Prevent duplicate active entries for the same patient/doctor/slot
+        Index(
+            "uq_active_waitlist",
+            "patient_id", "doctor_id", "requested_start",
+            unique=True,
+            postgresql_where=text("status IN ('WAITING','NOTIFIED')"),
+        ),
+    )
