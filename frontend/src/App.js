@@ -4,7 +4,9 @@ import { BrowserRouter } from "react-router-dom";
 import {
   CalendarDays, Clock3, HeartPulse, LogOut, Search, ShieldCheck, Stethoscope,
   Users, ArrowRight, Pill, Bell, Plus, Trash2, FileText, X, Timer, CalendarClock,
+  TrendingUp, RefreshCw,
 } from "lucide-react";
+import { BarChart, Bar, XAxis, ResponsiveContainer, Tooltip, Cell } from "recharts";
 import "@/App.css";
 import "@/portal.css";
 
@@ -703,7 +705,7 @@ function AdminPortal({ session, tab }) {
               </div>
             ))}
           </div>
-          <div className="empty admin-empty"><ShieldCheck size={28} /><strong>All systems are ready</strong><span>Use the navigation to manage doctors, appointments and activity.</span></div>
+          <InsightsPanel headers={headers} />
         </>
       )}
       {tab === "doctors" && <DoctorAdmin doctors={doctors} headers={headers} onChange={loadAll} />}
@@ -1049,6 +1051,89 @@ function AdminWaitlistView({ headers }) {
       ) : (
         <div className="empty"><Timer size={22} /><span>No waitlist entries yet.</span></div>
       )}
+    </section>
+  );
+}
+
+function InsightsPanel({ headers }) {
+  const [days, setDays] = useState(7);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(() => {
+    setLoading(true);
+    client
+      .get(`/admin/insights?days=${days}`, headers)
+      .then((r) => setData(r.data))
+      .finally(() => setLoading(false));
+  }, [days]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!data) return <div className="empty"><span>Loading insights…</span></div>;
+
+  const cards = [
+    { key: "cancellations", label: `Cancellations · last ${days}d`, value: data.cancellations, hint: "From audit log" },
+    { key: "slots_recovered", label: "Slots recovered via waitlist", value: data.slots_recovered, hint: `${data.waitlist_conversion_rate}% conversion` },
+    { key: "avg_wait_minutes", label: "Avg. patient wait", value: `${data.avg_wait_minutes}m`, hint: `${data.waitlist_conversions} claims` },
+    { key: "patients_rebooked", label: "Patients rebooked", value: data.patients_rebooked, hint: "After cancellation" },
+  ];
+  const max = Math.max(1, ...data.cancellations_by_day.map((d) => d.count));
+
+  return (
+    <section className="content-grid" data-testid="insights-panel">
+      <div className="section-heading">
+        <div><span className="eyebrow teal">INSIGHTS</span><h2>Cancellation & waitlist performance</h2></div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {[7, 14, 30].map((d) => (
+            <button
+              key={d}
+              className="slot"
+              style={days === d ? { background: "var(--teal)", color: "#fff" } : {}}
+              data-testid={`insights-range-${d}`}
+              onClick={() => setDays(d)}>
+              {d}d
+            </button>
+          ))}
+          <button className="slot" data-testid="insights-refresh" onClick={load} disabled={loading}>
+            <RefreshCw size={13} /> Refresh
+          </button>
+        </div>
+      </div>
+      <div className="metrics">
+        {cards.map((c) => (
+          <div className="metric" data-testid={`insights-metric-${c.key}`} key={c.key}>
+            <span>{c.label}</span>
+            <strong>{c.value}</strong>
+            <small>{c.hint}</small>
+          </div>
+        ))}
+      </div>
+      <div className="booking-panel" style={{ maxWidth: "100%", padding: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <strong><TrendingUp size={16} /> Cancellations per day</strong>
+          <span className="eyebrow">{data.waitlist_active} active on waitlist</span>
+        </div>
+        <div style={{ height: 220, marginTop: 6 }} data-testid="insights-chart">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data.cancellations_by_day} barSize={26}>
+              <XAxis
+                dataKey="date"
+                tickFormatter={(d) => new Date(d).toLocaleDateString([], { month: "short", day: "numeric" })}
+                stroke="#71817e"
+                fontSize={12}
+              />
+              <Tooltip
+                contentStyle={{ borderRadius: 8, border: "1px solid var(--line)", fontSize: 12 }}
+                labelFormatter={(d) => new Date(d).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
+              />
+              <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                {data.cancellations_by_day.map((d, i) => (
+                  <Cell key={i} fill={d.count >= max && max > 0 ? "#f1a43b" : "#168c82"} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
     </section>
   );
 }

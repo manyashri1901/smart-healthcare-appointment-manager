@@ -320,3 +320,84 @@ class MongoRepo:
                 {"id": {"$in": ids}}, {"$set": {"status": "EXPIRED", "updated_at": now_iso}}
             )
         return expired
+
+    # -------------------------------------------------------------- insights
+    async def insights(self, days: int = 7) -> dict:
+        from datetime import timedelta
+        now_dt = datetime.now(timezone.utc)
+        cutoff_dt = now_dt - timedelta(days=days)
+        cutoff = cutoff_dt.isoformat()
+
+        # Cancellations by day (from audit log)
+        by_day: dict[str, int] = {}
+        for i in range(days):
+            day = (now_dt - timedelta(days=days - 1 - i)).date().isoformat()
+            by_day[day] = 0
+
+        cancellations = 0
+        rebooked_patients: set[str] = set()
+        cancelled_by_patient: dict[str, str] = {}  # patient_id -> earliest cancel ts
+        async for a in self.db.audit.find({"timestamp": {"$gte": cutoff}}):
+            action = a.get("action")
+            ts = a.get("timestamp") or ""
+            if action == "APPOINTMENT_CANCELLED":
+                cancellations += 1
+                d = ts[:10]
+                if d in by_day:
+                    by_day[d] += 1
+                uid = a.get("user_id")
+                if uid and uid not in cancelled_by_patient:
+                    cancelled_by_patient[uid] = ts
+            elif action in ("APPOINTMENT_CREATED", "WAITLIST_CLAIMED", "APPOINTMENT_RESCHEDULED"):
+                uid = a.get("user_id")
+                if uid and uid in cancelled_by_patient and ts > cancelled_by_patient[uid]:
+                    rebooked_patients.add(uid)
+
+        # Waitlist metrics in window (use updated_at when present, else created_at)
+        waitlist_booked = 0
+        waitlist_expired = 0
+        waitlist_active = 0
+        total_wait_seconds = 0.0
+        wait_samples = 0
+        async for w in self.db.waitlist.find({}):
+            ref = w.get("updated_at") or (w.get("created_at").isoformat() if hasattr(w.get("created_at"), "isoformat") else w.get("created_at")) or ""
+            if not isinstance(ref, str):
+                continue
+            if ref < cutoff:
+                # only skip terminal statuses outside window; count active
+                if w.get("status") in ("WAITING", "NOTIFIED"):
+                    waitlist_active += 1
+                continue
+            status = w.get("status")
+            if status == "BOOKED":
+                waitlist_booked += 1
+                try:
+                    created = w.get("created_at")
+                    updated = w.get("updated_at")
+                    c_dt = created if isinstance(created, datetime) else datetime.fromisoformat(created)
+                    u_dt = datetime.fromisoformat(updated) if isinstance(updated, str) else now_dt
+                    total_wait_seconds += max(0.0, (u_dt - c_dt).total_seconds())
+                    wait_samples += 1
+                except Exception:
+                    pass
+            elif status == "EXPIRED":
+                waitlist_expired += 1
+            elif status in ("WAITING", "NOTIFIED"):
+                waitlist_active += 1
+
+        promoted = waitlist_booked + waitlist_expired
+        conversion_rate = round((waitlist_booked / promoted) * 100, 1) if promoted else 0.0
+        avg_wait_minutes = round((total_wait_seconds / wait_samples) / 60, 1) if wait_samples else 0.0
+
+        return {
+            "days": days,
+            "cancellations": cancellations,
+            "waitlist_conversions": waitlist_booked,
+            "waitlist_expired": waitlist_expired,
+            "waitlist_conversion_rate": conversion_rate,
+            "avg_wait_minutes": avg_wait_minutes,
+            "slots_recovered": waitlist_booked,
+            "patients_rebooked": len(rebooked_patients),
+            "waitlist_active": waitlist_active,
+            "cancellations_by_day": [{"date": d, "count": c} for d, c in by_day.items()],
+        }

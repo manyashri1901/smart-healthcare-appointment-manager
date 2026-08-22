@@ -110,3 +110,9 @@ async def list_notifications(user=Depends(require_role("ADMIN"))):
 @router.get("/admin/audit")
 async def audit(user=Depends(require_role("ADMIN"))):
     return await repo().list_audit()
+
+
+@router.get("/admin/insights")
+async def insights(days: int = 7, user=Depends(require_role("ADMIN"))):
+    days = max(1, min(30, days))
+    return await repo().insights(days)

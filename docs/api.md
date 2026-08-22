@@ -65,6 +65,7 @@ Every route below is prefixed with `/api`. Auth-protected routes require the
 | GET   | `/admin/notifications` | | Admin |
 | GET   | `/admin/audit` | | Admin |
 | GET   | `/admin/waitlist` | | Admin |
+| GET   | `/admin/insights` | `?days=7` (1-30) | Admin | Cancellations, waitlist conversions, avg wait, rebooked patients, per-day cancellation series |
 
 ## Waitlist
 | Method | Path | Body | Role | Notes |
