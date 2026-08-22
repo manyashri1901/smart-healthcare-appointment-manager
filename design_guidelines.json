@@ -1,0 +1,39 @@
+{
+  "app_name": "PulseCare Healthcare Management Platform",
+  "archetype": "ORGANIC & EARTHY",
+  "theme": "light",
+  "typography": {
+    "heading_font": "Plus Jakarta Sans, sans-serif",
+    "body_font": "Inter, sans-serif",
+    "mono_font": "JetBrains Mono, monospace"
+  },
+  "colors": {
+    "primary": "#0D9488",
+    "primary_foreground": "#FFFFFF",
+    "secondary": "#F0FDFA",
+    "accent": "#F59E0B",
+    "background": "#F8FAFC",
+    "card_background": "#FFFFFF",
+    "text_main": "#0F172A",
+    "text_muted": "#64748B",
+    "border": "#E2E8F0"
+  },
+  "visual_enhancers": {
+    "border_radius": "0.75rem",
+    "shadow": "0 10px 25px -5px rgba(13, 148, 136, 0.08), 0 8px 10px -6px rgba(13, 148, 136, 0.08)",
+    "glassmorphism": "backdrop-blur-xl bg-white/80 border border-white/20"
+  },
+  "component_path": "/app/frontend/src/components",
+  "instructions_to_main_agent": "Build a robust healthcare appointment and follow-up management platform supporting Patient, Doctor, and Admin roles with dynamic availability, transactional slot locking, AI health summaries (graceful fallback), prescriptions, medication reminders, Google Calendar OAuth sync, audit logs, and complete portals.",
+  "image_urls": {
+    "doctor_patient": "https://images.unsplash.com/photo-1631217868264-e5b90bb7e133?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwxfHxkb2N0b3IlMjBwYXRpZW50JTIwY29uc3VsdGF0aW9uJTIwY2xpbmljfGVufDB8fHx8MTc4NzM3NTU0OHww&ixlib=rb-4.1.0&q=85",
+    "clinic_interior": "https://images.unsplash.com/photo-1762625570087-6d98fca29531?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzB8MHwxfHNlYXJjaHwzfHxtZWRpY2FsJTIwaGVhbHRoY2FyZSUyMG1vZGVybiUyMGNsaW5pYyUyMGludGVyaW9yfGVufDB8fHx8MTc4NzM3NTU0OHww&ixlib=rb-4.1.0&q=85",
+    "stethoscope": "https://images.unsplash.com/photo-1655313719493-16ebe4906441?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzZ8MHwxfHNlYXJjaHwxfHxzdGV0aG9zY29wZSUyMG1lZGljYWwlMjBlcXVpcG1lbnQlMjBwcm9mZXNzaW9uYWx8ZW58MHx8fHwxNzg3Mzc1NTQ4fDA&ixlib=rb-4.1.0&q=85"
+  },
+  "universal_guidelines": [
+    "Every interactive and key informational element must include a data-testid attribute.",
+    "Do not use transparent background in headers or overlays where content scrolls under without blur.",
+    "Ensure all text meets APCA/WCAG contrast ratios.",
+    "Implement fully functional backend APIs, PostgreSQL database, authentication, slot locking, AI integration, and notifications."
+  ]
+}

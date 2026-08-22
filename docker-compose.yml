@@ -1,0 +1,66 @@
+version: "3.9"
+
+# Production reference stack — spin up the full application with PostgreSQL,
+# Redis, and a Celery worker that reuses the same job logic as APScheduler.
+#
+# The preview environment runs APScheduler inside FastAPI directly; the worker
+# service below is only required in production.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: pulsecare
+      POSTGRES_PASSWORD: pulsecare
+      POSTGRES_DB: pulsecare
+    ports: ["5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql://pulsecare:pulsecare@postgres:5432/pulsecare
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: change-me
+      CORS_ORIGINS: http://localhost:3000
+      FRONTEND_URL: http://localhost:3000
+      BACKEND_URL: http://localhost:8001
+      # Optional integrations — leave blank to degrade gracefully.
+      LLM_PROVIDER: ""
+      LLM_API_KEY: ""
+      LLM_MODEL: "claude-haiku-4-5"
+      SMTP_HOST: ""
+      SMTP_PORT: "587"
+      SMTP_USER: ""
+      SMTP_PASS: ""
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      GOOGLE_REDIRECT_URI: "http://localhost:8001/api/calendar/google/callback"
+    ports: ["8001:8001"]
+    depends_on: [postgres, redis]
+
+  worker:
+    build:
+      context: ./backend
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://pulsecare:pulsecare@postgres:5432/pulsecare
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [postgres, redis, backend]
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      REACT_APP_BACKEND_URL: http://localhost:8001
+    ports: ["3000:3000"]
+    depends_on: [backend]
+
+volumes:
+  postgres-data:
