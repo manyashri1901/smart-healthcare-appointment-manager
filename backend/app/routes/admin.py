@@ -1,6 +1,7 @@
 """Admin endpoints."""
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import Response
 
 from ..db import repo
 from ..schemas import DoctorCreate, DoctorUpdate, LeaveRequest
@@ -116,3 +117,42 @@ async def audit(user=Depends(require_role("ADMIN"))):
 async def insights(days: int = 7, user=Depends(require_role("ADMIN"))):
     days = max(1, min(30, days))
     return await repo().insights(days)
+
+
+@router.get("/admin/insights.csv")
+async def insights_csv(days: int = 7, user=Depends(require_role("ADMIN"))):
+    import csv, io
+    from datetime import datetime, timezone
+
+    days = max(1, min(30, days))
+    data = await repo().insights(days)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    generated = datetime.now(timezone.utc).isoformat()
+    w.writerow(["PulseCare Cancellation & Waitlist Report"])
+    w.writerow(["Generated at", generated])
+    w.writerow(["Window (days)", days])
+    w.writerow([])
+    w.writerow(["Summary metric", "Value"])
+    for key in (
+        "cancellations",
+        "waitlist_conversions",
+        "waitlist_expired",
+        "waitlist_conversion_rate",
+        "avg_wait_minutes",
+        "slots_recovered",
+        "patients_rebooked",
+        "waitlist_active",
+    ):
+        w.writerow([key.replace("_", " ").title(), data.get(key)])
+    w.writerow([])
+    w.writerow(["Date", "Cancellations"])
+    for row in data.get("cancellations_by_day", []):
+        w.writerow([row["date"], row["count"]])
+    csv_body = buf.getvalue()
+    filename = f"pulsecare-insights-{days}d-{generated[:10]}.csv"
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

@@ -4,7 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import {
   CalendarDays, Clock3, HeartPulse, LogOut, Search, ShieldCheck, Stethoscope,
   Users, ArrowRight, Pill, Bell, Plus, Trash2, FileText, X, Timer, CalendarClock,
-  TrendingUp, RefreshCw,
+  TrendingUp, RefreshCw, Download,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, ResponsiveContainer, Tooltip, Cell } from "recharts";
 import "@/App.css";
@@ -1095,6 +1095,17 @@ function InsightsPanel({ headers }) {
           ))}
           <button className="slot" data-testid="insights-refresh" onClick={load} disabled={loading}>
             <RefreshCw size={13} /> Refresh
+          </button>
+          <button className="slot" data-testid="insights-download" onClick={async () => {
+            const r = await client.get(`/admin/insights.csv?days=${days}`, { ...headers, responseType: "blob" });
+            const url = URL.createObjectURL(new Blob([r.data], { type: "text/csv" }));
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `pulsecare-insights-${days}d.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}>
+            <Download size={13} /> Download report
           </button>
         </div>
       </div>
