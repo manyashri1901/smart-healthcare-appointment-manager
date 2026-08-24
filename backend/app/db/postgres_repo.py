@@ -61,6 +61,16 @@ class PostgresRepo:
             u = (await s.execute(select(m.User).where(m.User.id == user_id))).scalar_one_or_none()
             return _dump(u)
 
+    async def get_users_by_ids(self, user_ids: list[str]) -> dict[str, dict]:
+        """Batch lookup — one query for all ids, keyed by id for O(1) access."""
+        if not user_ids:
+            return {}
+        async with self.session() as s:
+            rows = (
+                await s.execute(select(m.User).where(m.User.id.in_(set(user_ids))))
+            ).scalars().all()
+            return {u.id: _dump(u) for u in rows}
+
     async def get_user_by_email(self, email: str) -> Optional[dict]:
         async with self.session() as s:
             u = (

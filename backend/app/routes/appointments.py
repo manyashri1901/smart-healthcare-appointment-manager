@@ -49,8 +49,7 @@ async def hold(data: HoldRequest, user=Depends(require_role("PATIENT"))):
         "created_at": now(),
         "updated_at": None,
     }
-    # Pre-check existing appointments (Postgres does this inside the transaction;
-    # we replicate the check for the Mongo adapter too).
+    # Pre-check existing appointments before the transaction-level check below.
     busy = await r.busy_starts(data.doctor_id)
     if hold_doc["start"] in busy:
         raise HTTPException(409, "This slot is no longer available")
@@ -137,11 +136,13 @@ async def list_appointments(user=Depends(current_user)):
         items = await r.list_appointments({"doctor_id": user["id"]})
     else:
         items = await r.list_appointments({})
-    # decorate with names
+    # decorate with names — one batched lookup for all patients/doctors involved
+    user_ids = {item["patient_id"] for item in items} | {item["doctor_id"] for item in items}
+    users = await r.get_users_by_ids(list(user_ids))
     out = []
     for item in items:
-        p = await r.get_user_by_id(item["patient_id"])
-        d = await r.get_user_by_id(item["doctor_id"])
+        p = users.get(item["patient_id"])
+        d = users.get(item["doctor_id"])
         item["patient_name"] = p.get("name") if p else "Patient"
         item["doctor_name"] = d.get("name") if d else "Doctor"
         out.append(item)

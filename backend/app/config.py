@@ -13,14 +13,14 @@ def env(key: str, default: str | None = None) -> str | None:
 
 # Core
 JWT_SECRET = env("JWT_SECRET", "pulsecare-development-secret")
+# Origins allowed to call the API — this is what actually controls CORS
+# (see server.py's CORSMiddleware). Comma-separated, e.g.
+# "http://localhost:3000,https://app.example.com".
 CORS_ORIGINS = (env("CORS_ORIGINS", "*") or "*").split(",")
-FRONTEND_URL = env("FRONTEND_URL", "http://localhost:3000")
 BACKEND_URL = env("BACKEND_URL", "http://localhost:8001")
 
-# Database selection: PostgreSQL if DATABASE_URL is set, else MongoDB.
+# PostgreSQL connection string — required, no fallback.
 DATABASE_URL = env("DATABASE_URL")
-MONGO_URL = env("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = env("DB_NAME", "pulsecare")
 
 # LLM (provider-agnostic)
 LLM_PROVIDER = env("LLM_PROVIDER")            # anthropic | openai | emergent | ""
@@ -43,7 +43,3 @@ WAITLIST_CLAIM_MINUTES = int(env("WAITLIST_CLAIM_MINUTES", "10") or 10)
 
 # Notification retry
 NOTIFICATION_MAX_RETRIES = int(env("NOTIFICATION_MAX_RETRIES", "3") or 3)
-
-
-def use_postgres() -> bool:
-    return bool(DATABASE_URL)
