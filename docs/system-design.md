@@ -1,4 +1,4 @@
-# PulseCare System Design
+# SmartCare System Design
 
 Word count target: ≤ 800.
 
@@ -7,7 +7,7 @@ Word count target: ≤ 800.
 Two patients can click the same 30-minute slot at the same millisecond.
 Because network latency between the browsers is unequal, both requests can
 reach the API in parallel and pass any client-side availability check.
-PulseCare enforces uniqueness in the storage layer so exactly one of the two
+SmartCare enforces uniqueness in the storage layer so exactly one of the two
 requests can succeed.
 
 **PostgreSQL adapter.** The `appointments` table declares a partial unique
@@ -39,15 +39,15 @@ When an admin registers a leave date:
    date. This is a cheap indexed lookup on `(doctor_id, start)`.
 3. Persist the leave record (idempotent upsert on the composite key).
 4. For each affected appointment: mark it `CANCELLED` with reason
-   `DOCTOR_LEAVE`, enqueue a `LEAVE_CONFLICT` email to the patient, and
-   dispatch a background task to delete the Google Calendar event.
+   `DOCTOR_LEAVE` and enqueue a `LEAVE_CONFLICT` email to the patient.
 5. Write an `audit_logs` row capturing the affected count.
 6. New availability queries automatically exclude the leave date via the
    `leaves` collection/table.
 
 Because the leave upsert and appointment cancellation happen sequentially in
-the request handler while emails and calendar deletion happen via
-`BackgroundTasks`, an SMTP outage does not block the leave being recorded.
+the request handler while the notification email is only *enqueued* (sent
+later by the background worker), an SMTP outage does not block the leave
+being recorded.
 
 ## C. Slot Hold Mechanism
 
@@ -73,14 +73,13 @@ never occupy a partial unique index slot forever.
 
 ## D. Notification Failure Handling
 
-Emails, AI generation, and calendar synchronization are strictly
-**post-transactional**. The appointment commit is durable *before* any of
-them run:
+Emails and AI generation are strictly **post-transactional**. The
+appointment commit is durable *before* either runs:
 
 ```
-tx commit ─► enqueue email row (status=PENDING, next_retry_at=now)
+tx commit ─► build .ics invite (local, synchronous, cannot fail on I/O)
+          ─► enqueue email row (status=PENDING, next_retry_at=now, .ics attached)
           ─► BackgroundTasks: LLM pre-visit generation
-          ─► BackgroundTasks: Google Calendar create
 ```
 
 The `process_pending_emails` job picks up rows where `status IN
@@ -96,10 +95,30 @@ is caught and the AI summary row records `status=FAILED` with a truncated
 error string. Doctors always see the *original* patient symptoms; the AI
 result is presented alongside as an aid, never a replacement.
 
-Google Calendar sync stores tokens in `calendar_connections` and is
-per-user. On event creation failure the appointment's `calendar_status`
-becomes `FAILED`; on reschedule or cancel the sync layer attempts delete +
-recreate and simply logs failures — the booking state remains authoritative.
+### Calendar integration: .ics invites, not live Google Calendar sync
+
+This was originally built as live Google Calendar OAuth sync (per-user
+token storage, `create`/`update`/`delete` against the Calendar API). That's
+gone. **Why:** shipping a Calendar API integration in production mode
+requires Google's OAuth app verification, which requires business/billing
+verification on the Cloud project — unavailable in this setup, and the
+"unverified app, 100 test users" cap doesn't cover a real deployment. An
+external approval blocker, not a code problem.
+
+**Replacement:** `app/integrations/calendar.py` builds a standard `.ics`
+file (RFC 5545) locally — pure string formatting, no network call, so it
+can't fail the way an API call can — attached to the same email the
+booking/reschedule/cancellation flow already sends. `Notification` carries
+`attachment_filename`/`attachment_content`/`ics_method` alongside its
+existing retry/backoff machinery, so there's no separate delivery path. A
+reschedule reuses the original appointment's id as the calendar UID with
+an incremented `SEQUENCE`, so a compliant client updates the existing
+event instead of duplicating it; cancellation sends `METHOD:CANCEL` on
+the same UID.
+
+**Trade-off:** one-way, point-in-time — the patient's calendar reflects
+the appointment as of when they opened the invite, not pushed live
+afterward. Traded for zero external dependencies and no approval process.
 
 Together these patterns ensure that **the primary healthcare workflow —
 book, hold, confirm, visit, follow-up — is always available even when every

@@ -1,140 +1,69 @@
-"""Google Calendar OAuth 2.0 adapter.
+"""Calendar invites via standard .ics files (iCalendar, RFC 5545).
 
-If Google credentials are absent every method returns UNAVAILABLE; the
-booking workflow always remains valid.
-
-Tokens are stored in the ``calendar_connections`` collection/table and never
-exposed to the frontend.
+No external service, no OAuth, no API keys. The app builds a self-contained
+.ics attachment locally and the caller sends it on the relevant email
+(booking confirmation, reschedule, cancellation). Any RFC 5545-compliant
+calendar client — Google Calendar, Outlook, Apple Calendar — recognizes a
+``text/calendar`` attachment and offers to add/update/remove the event; no
+account connection is required on either side.
 """
 from __future__ import annotations
-import logging
 from datetime import datetime, timezone
-from typing import Optional
-from urllib.parse import urlencode
-
-import httpx
-
-from .. import config
-
-log = logging.getLogger("calendar")
-
-SCOPES = "https://www.googleapis.com/auth/calendar.events openid email"
 
 
-def configured() -> bool:
-    return bool(config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET)
+def _dt(iso: str) -> str:
+    """Format an ISO datetime string as an iCalendar UTC DATE-TIME (YYYYMMDDTHHMMSSZ)."""
+    d = datetime.fromisoformat(iso)
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def auth_url(state: str) -> str:
-    if not configured():
-        return ""
-    params = {
-        "client_id": config.GOOGLE_CLIENT_ID,
-        "redirect_uri": config.GOOGLE_REDIRECT_URI,
-        "response_type": "code",
-        "scope": SCOPES,
-        "access_type": "offline",
-        "prompt": "consent",
-        "state": state,
-    }
-    return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+def _escape(text: str) -> str:
+    """Escape text per RFC 5545 §3.3.11 (backslash, semicolon, comma, newline)."""
+    return (text or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
-async def exchange_code(code: str) -> Optional[dict]:
-    if not configured():
-        return None
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "code": code,
-                "client_id": config.GOOGLE_CLIENT_ID,
-                "client_secret": config.GOOGLE_CLIENT_SECRET,
-                "redirect_uri": config.GOOGLE_REDIRECT_URI,
-                "grant_type": "authorization_code",
-            },
-        )
-        if r.status_code != 200:
-            log.warning("Google token exchange failed: %s", r.text[:200])
-            return None
-        data = r.json()
-        return {
-            "access_token": data["access_token"],
-            "refresh_token": data.get("refresh_token"),
-            "token_expiry": data.get("expires_in"),
-            "scope": data.get("scope"),
-        }
-
-
-async def _refresh(conn: dict) -> Optional[str]:
-    if not conn.get("refresh_token"):
-        return None
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": config.GOOGLE_CLIENT_ID,
-                "client_secret": config.GOOGLE_CLIENT_SECRET,
-                "refresh_token": conn["refresh_token"],
-                "grant_type": "refresh_token",
-            },
-        )
-        if r.status_code != 200:
-            return None
-        return r.json().get("access_token")
-
-
-async def _authed_request(conn: dict, method: str, url: str, **kwargs) -> tuple[Optional[dict], str]:
-    token = conn.get("access_token")
-    async with httpx.AsyncClient(timeout=15) as c:
-        for attempt in range(2):
-            r = await c.request(method, url, headers={"Authorization": f"Bearer {token}"}, **kwargs)
-            if r.status_code == 401 and attempt == 0:
-                token = await _refresh(conn)
-                if not token:
-                    return None, "Token refresh failed"
-                continue
-            if r.status_code >= 400:
-                return None, f"HTTP {r.status_code}: {r.text[:200]}"
-            return (r.json() if r.text else {}), ""
-    return None, "unreachable"
-
-
-async def create_event(conn: dict, title: str, start_iso: str, end_iso: str, description: str = "") -> tuple[Optional[str], str]:
-    if not configured() or not conn:
-        return None, "Calendar not connected"
-    data, err = await _authed_request(
-        conn,
-        "POST",
-        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-        json={
-            "summary": title,
-            "description": description,
-            "start": {"dateTime": start_iso},
-            "end": {"dateTime": end_iso},
-        },
-    )
-    return (data.get("id") if data else None), err
-
-
-async def delete_event(conn: dict, event_id: str) -> tuple[bool, str]:
-    if not configured() or not conn or not event_id:
-        return False, "Not connected"
-    _, err = await _authed_request(
-        conn,
-        "DELETE",
-        f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
-    )
-    return (err == "", err)
-
-
-async def update_event(conn: dict, event_id: str, start_iso: str, end_iso: str) -> tuple[bool, str]:
-    if not configured() or not conn or not event_id:
-        return False, "Not connected"
-    _, err = await _authed_request(
-        conn,
-        "PATCH",
-        f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
-        json={"start": {"dateTime": start_iso}, "end": {"dateTime": end_iso}},
-    )
-    return (err == "", err)
+def build_ics(
+    *,
+    uid: str,
+    start_iso: str,
+    end_iso: str,
+    summary: str,
+    description: str = "",
+    location: str = "",
+    organizer_email: str = "",
+    attendee_emails: list[str] | None = None,
+    method: str = "REQUEST",
+    sequence: int = 0,
+) -> str:
+    """Build a single-event .ics file. method is REQUEST (create/update) or CANCEL."""
+    method = method.upper()
+    status = "CANCELLED" if method == "CANCEL" else "CONFIRMED"
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//SmartCare//Appointment Scheduler//EN",
+        "CALSCALE:GREGORIAN",
+        f"METHOD:{method}",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{_dt(datetime.now(timezone.utc).isoformat())}",
+        f"DTSTART:{_dt(start_iso)}",
+        f"DTEND:{_dt(end_iso)}",
+        f"SEQUENCE:{sequence}",
+        f"STATUS:{status}",
+        f"SUMMARY:{_escape(summary)}",
+    ]
+    if description:
+        lines.append(f"DESCRIPTION:{_escape(description)}")
+    if location:
+        lines.append(f"LOCATION:{_escape(location)}")
+    if organizer_email:
+        lines.append(f"ORGANIZER:mailto:{organizer_email}")
+    for email in attendee_emails or []:
+        if email:
+            lines.append(f"ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:{email}")
+    lines += ["END:VEVENT", "END:VCALENDAR"]
+    # RFC 5545 requires CRLF line endings.
+    return "\r\n".join(lines) + "\r\n"

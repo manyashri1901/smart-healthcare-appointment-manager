@@ -4,6 +4,7 @@ The claim flow reuses the existing concurrency-safe booking primitives
 (``create_hold`` + ``create_appointment``) so slot-hold and double-booking
 logic remain the single source of truth.
 """
+import logging
 import uuid
 from datetime import timedelta
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -13,6 +14,7 @@ from ..schemas import WaitlistJoin, WaitlistClaim
 from ..security import current_user, require_role, now
 from .. import services, config
 
+log = logging.getLogger("waitlist")
 router = APIRouter()
 
 
@@ -109,7 +111,7 @@ async def claim(entry_id: str, data: WaitlistClaim, background: BackgroundTasks,
         "end": entry["requested_end"],
         "status": "HELD",
         "expires_at": (now() + timedelta(minutes=config.SLOT_HOLD_MINUTES)).isoformat(),
-        "created_at": now().isoformat(),
+        "created_at": now(),
         "updated_at": None,
     }
     busy = await r.busy_starts(entry["doctor_id"])
@@ -118,7 +120,11 @@ async def claim(entry_id: str, data: WaitlistClaim, background: BackgroundTasks,
         # and promote the next eligible waiter.
         await r.update_waitlist(entry_id, {"status": "EXPIRED", "updated_at": now().isoformat()})
         raise HTTPException(409, "This slot is no longer available")
-    hold = await r.create_hold(hold_doc)
+    try:
+        hold = await r.create_hold(hold_doc)
+    except Exception:
+        log.exception("Unexpected error creating hold while claiming waitlist entry=%s", entry_id)
+        raise HTTPException(500, "We couldn't claim this slot due to an unexpected error. Please try again.")
     if not hold:
         await r.update_waitlist(entry_id, {"status": "EXPIRED", "updated_at": now().isoformat()})
         raise HTTPException(409, "This slot is no longer available")
@@ -142,10 +148,13 @@ async def claim(entry_id: str, data: WaitlistClaim, background: BackgroundTasks,
         },
         "ai_status": "PENDING",
         "notification_status": "PENDING",
-        "calendar_status": "PENDING",
         "created_at": now(),
     }
-    created = await r.create_appointment(appt)
+    try:
+        created = await r.create_appointment(appt)
+    except Exception:
+        log.exception("Unexpected error creating appointment while claiming waitlist entry=%s", entry_id)
+        raise HTTPException(500, "We couldn't confirm this appointment due to an unexpected error. Please try again.")
     if not created:
         # Someone else beat us to the atomic insert.
         await r.update_waitlist(entry_id, {"status": "EXPIRED", "updated_at": now().isoformat()})
@@ -167,21 +176,28 @@ async def claim(entry_id: str, data: WaitlistClaim, background: BackgroundTasks,
 
     # Post-transactional side effects — never block the appointment on them.
     doctor = await r.get_user_by_id(entry["doctor_id"])
+    invite_ics = services.build_appointment_ics(appt, doctor, user, method="REQUEST")
     await services.queue_email(
         "BOOKING_CONFIRMED",
         user.get("email"),
-        "Your PulseCare appointment is confirmed",
-        f"<p>Your waitlist claim succeeded — appointment confirmed for {appt['start']}.</p>",
+        "Your SmartCare appointment is confirmed",
+        f"<p>Your waitlist claim succeeded — appointment confirmed for {appt['start']}.</p>"
+        f"<p>A calendar invite (.ics) is attached — most calendar apps will add it automatically.</p>",
+        attachment_filename="smartcare-appointment.ics",
+        attachment_content=invite_ics,
+        ics_method="REQUEST",
     )
     if doctor and doctor.get("email"):
         await services.queue_email(
             "BOOKING_NOTIFY_DOCTOR",
             doctor["email"],
-            "New PulseCare appointment (from waitlist)",
+            "New SmartCare appointment (from waitlist)",
             f"<p>New consultation booked for {appt['start']} with {user.get('name')}.</p>",
+            attachment_filename="smartcare-appointment.ics",
+            attachment_content=invite_ics,
+            ics_method="REQUEST",
         )
     background.add_task(services.generate_pre_visit, appt)
-    background.add_task(services.sync_calendar_create, appt)
     return created
 
 

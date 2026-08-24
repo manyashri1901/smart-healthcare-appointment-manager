@@ -7,6 +7,9 @@ import {
   TrendingUp, RefreshCw, Download,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, ResponsiveContainer, Tooltip, Cell } from "recharts";
+import FullCalendar from "@fullcalendar/react";
+import dayGridPlugin from "@fullcalendar/daygrid";
+import timeGridPlugin from "@fullcalendar/timegrid";
 import "@/App.css";
 import "@/portal.css";
 
@@ -47,7 +50,7 @@ function AuthScreen({ onSuccess }) {
   return (
     <main className="auth-shell">
       <section className="auth-visual">
-        <div className="brand"><HeartPulse size={22} /> PulseCare</div>
+        <div className="brand"><HeartPulse size={22} /> SmartCare</div>
         <div className="visual-copy">
           <span className="eyebrow">CARE, ORGANIZED</span>
           <h1>Every visit,<br /><em>thoughtfully</em> connected.</h1>
@@ -58,7 +61,7 @@ function AuthScreen({ onSuccess }) {
       <section className="auth-panel">
         <div className="auth-form">
           <span className="eyebrow teal">WELCOME BACK</span>
-          <h2>{mode === "login" ? "Sign in to PulseCare" : "Create your patient account"}</h2>
+          <h2>{mode === "login" ? "Sign in to SmartCare" : "Create your patient account"}</h2>
           <p className="muted">{mode === "login" ? "Your care dashboard is waiting." : "Start managing your visits in one place."}</p>
           <form onSubmit={submit}>
             {mode === "register" && (
@@ -85,12 +88,12 @@ function AuthScreen({ onSuccess }) {
           </form>
           <button className="text-button" data-testid="auth-mode-toggle"
             onClick={() => setMode(mode === "login" ? "register" : "login")}>
-            {mode === "login" ? "New to PulseCare? Create an account" : "Already have an account? Sign in"}
+            {mode === "login" ? "New to SmartCare? Create an account" : "Already have an account? Sign in"}
           </button>
           <div className="demo-note">
             <strong>Development access</strong>
-            <span>Admin: admin@pulsecare.example.com · Doctor: maya@pulsecare.example.com</span>
-            <span>Patient: alex@pulsecare.example.com · Password: PulseCare123!</span>
+            <span>Admin: admin@smartcare.example.com · Doctor: maya@smartcare.example.com</span>
+            <span>Patient: alex@smartcare.example.com · Password: SmartCare123!</span>
           </div>
         </div>
       </section>
@@ -110,7 +113,7 @@ function Dashboard({ session, logout }) {
   return (
     <div className="app-shell">
       <aside>
-        <div className="brand"><HeartPulse size={22} /> PulseCare</div>
+        <div className="brand"><HeartPulse size={22} /> SmartCare</div>
         <div className="profile">
           <div className="avatar">{session.user.name?.[0]}</div>
           <div>
@@ -205,7 +208,7 @@ function PatientPortal({ session, tab, setTab }) {
       {tab === "find-care" && <BookingFlow doctors={doctors} headers={headers} onBooked={refresh} />}
       {tab === "medications" && <MedicationsView headers={headers} appointments={appointments} />}
       {tab === "waitlist" && <PatientWaitlistView headers={headers} />}
-      {tab === "settings" && <CalendarSettings headers={headers} />}
+      {tab === "settings" && <AccountSettings session={session} />}
       {(tab === "overview" || tab === "appointments") && (
         selected ? (
           <AppointmentDetails id={selected} headers={headers} role="PATIENT" onBack={() => setSelected(null)} onChange={refresh} />
@@ -218,7 +221,47 @@ function PatientPortal({ session, tab, setTab }) {
   );
 }
 
-function AppointmentList({ appointments, role, onOpen, onFind }) {
+const STATUS_COLORS = {
+  CONFIRMED: "#168c82",
+  CANCELLED: "#a63b30",
+  COMPLETED: "#5b6b8c",
+};
+
+function AppointmentCalendar({ appointments, role, onOpen, leaves }) {
+  const events = appointments.map((a) => ({
+    id: a.id,
+    title: role === "PATIENT"
+      ? `${a.doctor_name || "Doctor"} · ${a.status}`
+      : `${a.patient_name || "Patient"} · ${a.symptoms?.chief_complaint || "Consultation"}`,
+    start: a.start,
+    end: a.end,
+    backgroundColor: STATUS_COLORS[a.status] || "#8a9490",
+    borderColor: STATUS_COLORS[a.status] || "#8a9490",
+  }));
+  const leaveEvents = (leaves || []).map((l) => ({
+    id: `leave-${l.date}`,
+    title: "On leave",
+    start: l.date,
+    allDay: true,
+    display: "background",
+    backgroundColor: "#f1a43b",
+  }));
+  return (
+    <div className="calendar-wrap" data-testid="appointment-calendar">
+      <FullCalendar
+        plugins={[dayGridPlugin, timeGridPlugin]}
+        initialView="dayGridMonth"
+        headerToolbar={{ left: "prev,next today", center: "title", right: "dayGridMonth,timeGridWeek" }}
+        height="auto"
+        events={[...leaveEvents, ...events]}
+        eventClick={(info) => { if (info.event.display !== "background") onOpen(info.event.id); }}
+      />
+    </div>
+  );
+}
+
+function AppointmentList({ appointments, role, onOpen, onFind, leaves }) {
+  const [view, setView] = useState("list");
   const upcoming = appointments.filter((a) => new Date(a.start) >= new Date() && a.status !== "CANCELLED");
   return (
     <section className="content-grid">
@@ -227,13 +270,19 @@ function AppointmentList({ appointments, role, onOpen, onFind }) {
           <span className="eyebrow teal">SCHEDULE</span>
           <h2>{role === "PATIENT" ? "Your appointments" : "My schedule"}</h2>
         </div>
-        {onFind && role === "PATIENT" && (
-          <button className="primary" data-testid="find-doctor-button" onClick={onFind}>
-            Find a doctor <ArrowRight size={16} />
-          </button>
-        )}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className={view === "list" ? "primary" : "slot"} data-testid="schedule-view-list-button" onClick={() => setView("list")}>List</button>
+          <button className={view === "calendar" ? "primary" : "slot"} data-testid="schedule-view-calendar-button" onClick={() => setView("calendar")}>Calendar</button>
+          {onFind && role === "PATIENT" && (
+            <button className="primary" data-testid="find-doctor-button" onClick={onFind}>
+              Find a doctor <ArrowRight size={16} />
+            </button>
+          )}
+        </div>
       </div>
-      {appointments.length ? (
+      {view === "calendar" ? (
+        <AppointmentCalendar appointments={appointments} role={role} onOpen={onOpen} leaves={leaves} />
+      ) : appointments.length ? (
         <div className="appointment-list">
           {appointments.map((a) => (
             <button className="appointment" key={a.id} data-testid={`appointment-${a.id}`} onClick={() => onOpen(a.id)}>
@@ -269,6 +318,7 @@ function BookingFlow({ doctors, headers, onBooked }) {
   const [slots, setSlots] = useState([]);
   const [hold, setHold] = useState(null);
   const [message, setMessage] = useState("");
+  const [slotUnavailable, setSlotUnavailable] = useState(false);
   const [waitlistPrompt, setWaitlistPrompt] = useState(null);
   const [symptoms, setSymptoms] = useState({
     chief_complaint: "", symptoms: "", symptom_duration: "", severity: "Medium", additional_notes: "",
@@ -283,6 +333,7 @@ function BookingFlow({ doctors, headers, onBooked }) {
 
   const holdSlot = async (slot) => {
     setMessage("");
+    setSlotUnavailable(false);
     setWaitlistPrompt(null);
     try {
       const r = await client.post("/appointments/hold", { doctor_id: doctor.id, ...slot }, headers);
@@ -323,6 +374,22 @@ function BookingFlow({ doctors, headers, onBooked }) {
       onBooked();
     } catch (e) {
       setMessage(e.response?.data?.detail || "Could not confirm the appointment.");
+      // A 409 here means the hold is dead (expired, or someone else's booking
+      // won the race) — lock the form instead of leaving a live countdown and
+      // an editable, submittable form pointed at a hold that no longer exists.
+      if (e.response?.status === 409) {
+        setSlotUnavailable(true);
+      }
+    }
+  };
+
+  const pickAnotherSlot = () => {
+    setHold(null);
+    setSlotUnavailable(false);
+    setMessage("");
+    if (doctor && date) {
+      client.get(`/doctors/${doctor.id}/availability`, { ...headers, params: { date } })
+        .then((r) => setSlots(r.data)).catch(() => setSlots([]));
     }
   };
 
@@ -362,7 +429,16 @@ function BookingFlow({ doctors, headers, onBooked }) {
               ))}
             </div>
           )}
-          {hold && (
+          {hold && slotUnavailable && (
+            <div className="error" data-testid="slot-unavailable-banner" style={{ display: "grid", gap: 10 }}>
+              <strong>This slot is no longer available</strong>
+              <span>{message || "It was either claimed by another patient or your hold expired. Pick a different time to continue."}</span>
+              <button className="primary" data-testid="pick-another-slot-button" onClick={pickAnotherSlot} style={{ justifySelf: "start" }}>
+                Choose a different time <ArrowRight size={16} />
+              </button>
+            </div>
+          )}
+          {hold && !slotUnavailable && (
             <>
               <HoldTimer expiresAt={hold.expires_at} onExpire={() => { setHold(null); setMessage("Your hold has expired. Please pick a slot again."); }} />
               <form className="symptom-form" onSubmit={confirm}>
@@ -394,7 +470,7 @@ function BookingFlow({ doctors, headers, onBooked }) {
               </form>
             </>
           )}
-          {message && <div className="success" data-testid="booking-message">{message}</div>}
+          {message && !slotUnavailable && <div className="success" data-testid="booking-message">{message}</div>}
           {waitlistPrompt && (
             <div className="booking-panel" style={{ borderColor: "#f1a43b", padding: 16 }}>
               <strong>Join the waitlist for {new Date(waitlistPrompt.start).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}?</strong>
@@ -660,17 +736,21 @@ function ClinicalForm({ id, headers, onSaved }) {
 function DoctorPortal({ session, tab }) {
   const headers = auth(session.token);
   const [appointments, setAppointments] = useState([]);
+  const [leaves, setLeaves] = useState([]);
   const [selected, setSelected] = useState(null);
   const refresh = useCallback(() => client.get("/appointments", headers).then((r) => setAppointments(r.data)), [session.token]);
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    client.get(`/doctors/${session.user.id}/leaves`, headers).then((r) => setLeaves(r.data)).catch(() => setLeaves([]));
+  }, [session.user.id]);
   return (
     <>
       <WelcomeBand role="DOCTOR" tab={tab} />
-      {tab === "settings" ? <CalendarSettings headers={headers} /> :
+      {tab === "settings" ? <AccountSettings session={session} /> :
         selected ? (
           <AppointmentDetails id={selected} headers={headers} role="DOCTOR" onBack={() => setSelected(null)} onChange={refresh} />
         ) : (
-          <AppointmentList appointments={appointments} role="DOCTOR" onOpen={setSelected} />
+          <AppointmentList appointments={appointments} role="DOCTOR" onOpen={setSelected} leaves={leaves} />
         )}
       <SafetyNote />
     </>
@@ -701,7 +781,7 @@ function AdminPortal({ session, tab }) {
               <div className="metric" data-testid={`metric-${k}`} key={k}>
                 <span>{l}</span>
                 <strong>{overview?.[k] ?? "—"}</strong>
-                <small>Across PulseCare</small>
+                <small>Across SmartCare</small>
               </div>
             ))}
           </div>
@@ -877,41 +957,41 @@ function MedicationsView({ headers, appointments }) {
   );
 }
 
-function CalendarSettings({ headers }) {
-  const [status, setStatus] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const load = () => client.get("/calendar/status", headers).then((r) => setStatus(r.data)).catch(() => setStatus({ configured: false, connected: false }));
-  useEffect(() => { load(); }, []);
-  const connect = async () => {
-    setBusy(true);
-    try {
-      const r = await client.get("/calendar/google/connect", headers);
-      window.location.href = r.data.url;
-    } catch (e) {
-      alert(e.response?.data?.detail || "Google Calendar is not configured on the server.");
-    } finally {
-      setBusy(false);
+function AccountSettings({ session }) {
+  const { user } = session;
+  const [doctorInfo, setDoctorInfo] = useState(null);
+  useEffect(() => {
+    if (user.role === "DOCTOR") {
+      client.get(`/doctors/${user.id}`, auth(session.token)).then((r) => setDoctorInfo(r.data)).catch(() => setDoctorInfo(null));
     }
-  };
-  const disconnect = async () => { await client.delete("/calendar/google/disconnect", headers); load(); };
-  if (!status) return <div className="empty"><span>Loading…</span></div>;
+  }, [user.id, user.role]);
+
+  const field = (label, value, testid) => (
+    <div>
+      <span className="muted" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</span>
+      <div style={{ fontWeight: 600, fontSize: 16 }} data-testid={testid}>{value}</div>
+    </div>
+  );
+
   return (
     <section className="content-grid">
-      <div className="section-heading"><div><span className="eyebrow teal">INTEGRATIONS</span><h2>Google Calendar</h2></div></div>
-      <div className="booking-panel">
-        {!status.configured && <p className="muted">Google Calendar is not configured on this server. Add <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> and <code>GOOGLE_REDIRECT_URI</code> to enable this feature.</p>}
-        {status.configured && !status.connected && (
-          <>
-            <p>Connect your Google account so PulseCare can add appointments to your calendar automatically.</p>
-            <button className="primary" data-testid="calendar-connect-button" disabled={busy} onClick={connect}>Connect Google Calendar</button>
-          </>
-        )}
-        {status.connected && (
-          <>
-            <p>Your Google Calendar is connected. New bookings will be added automatically.</p>
-            <button className="slot" data-testid="calendar-disconnect-button" onClick={disconnect}>Disconnect</button>
-          </>
-        )}
+      <div className="section-heading"><div><span className="eyebrow teal">ACCOUNT</span><h2>Your account</h2></div></div>
+      <div className="booking-panel" data-testid="account-info">
+        <div style={{ display: "grid", gap: 16 }}>
+          {field("Name", user.name, "account-name")}
+          {field("Email", user.email, "account-email")}
+          {field("Role", user.role === "DOCTOR" ? "Doctor" : user.role === "PATIENT" ? "Patient" : user.role, "account-role")}
+          {user.role === "DOCTOR" && doctorInfo && (
+            field(
+              "Specialty",
+              <>
+                {doctorInfo.specialization}
+                <div className="muted" style={{ fontWeight: 400, fontSize: 14 }}>{doctorInfo.qualification} · {doctorInfo.experience}</div>
+              </>,
+              "account-specialty"
+            )
+          )}
+        </div>
       </div>
     </section>
   );
@@ -1101,7 +1181,7 @@ function InsightsPanel({ headers }) {
             const url = URL.createObjectURL(new Blob([r.data], { type: "text/csv" }));
             const a = document.createElement("a");
             a.href = url;
-            a.download = `pulsecare-insights-${days}d.csv`;
+            a.download = `smartcare-insights-${days}d.csv`;
             a.click();
             URL.revokeObjectURL(url);
           }}>

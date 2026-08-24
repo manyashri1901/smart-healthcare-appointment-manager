@@ -48,10 +48,10 @@ class Appointment(Base):
     status: Mapped[str] = mapped_column(String, index=True)
     symptoms: Mapped[dict | None] = mapped_column(JSON)
     ai_status: Mapped[str] = mapped_column(String, default="PENDING")
+    post_ai_status: Mapped[str | None] = mapped_column(String)
     notification_status: Mapped[str] = mapped_column(String, default="PENDING")
-    calendar_status: Mapped[str] = mapped_column(String, default="PENDING")
-    patient_event_id: Mapped[str | None] = mapped_column(String)
-    doctor_event_id: Mapped[str | None] = mapped_column(String)
+    clinical_status: Mapped[str | None] = mapped_column(String)
+    cancellation_reason: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         # Partial unique index: only one active appointment per (doctor, start)
@@ -75,6 +75,15 @@ class Hold(Base):
     expires_at: Mapped[str] = mapped_column(String, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        # Partial unique index: only one active HELD hold per (doctor, start)
+        Index(
+            "uq_active_hold",
+            "doctor_id", "start",
+            unique=True,
+            postgresql_where=text("status = 'HELD'"),
+        ),
+    )
 
 
 class Clinical(Base):
@@ -113,6 +122,9 @@ class Notification(Base):
     next_retry_at: Mapped[str] = mapped_column(String, index=True)
     created_at: Mapped[str] = mapped_column(String)
     sent_at: Mapped[str | None] = mapped_column(String)
+    attachment_filename: Mapped[str | None] = mapped_column(String)
+    attachment_content: Mapped[str | None] = mapped_column(Text)
+    ics_method: Mapped[str | None] = mapped_column(String)
 
 
 class MedicationReminder(Base):
@@ -127,16 +139,6 @@ class MedicationReminder(Base):
     status: Mapped[str] = mapped_column(String, index=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_at: Mapped[str | None] = mapped_column(String)
-
-
-class CalendarConnection(Base):
-    __tablename__ = "calendar_connections"
-    user_id: Mapped[str] = mapped_column(String, primary_key=True)
-    access_token: Mapped[str] = mapped_column(Text)
-    refresh_token: Mapped[str | None] = mapped_column(Text)
-    token_expiry: Mapped[str | None] = mapped_column(String)
-    scope: Mapped[str | None] = mapped_column(String)
-    updated_at: Mapped[str] = mapped_column(String)
 
 
 class Audit(Base):

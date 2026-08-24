@@ -22,6 +22,14 @@ async def get_doctor(doctor_id: str, user=Depends(current_user)):
     return d
 
 
+@router.get("/doctors/{doctor_id}/leaves")
+async def doctor_leaves(doctor_id: str, user=Depends(current_user)):
+    d = await repo().get_user_by_id(doctor_id)
+    if not d or d.get("role") != "DOCTOR":
+        raise HTTPException(404, "Doctor not found")
+    return await repo().list_leaves(doctor_id)
+
+
 @router.get("/doctors/{doctor_id}/availability")
 async def availability(doctor_id: str, date: str, user=Depends(current_user)):
     r = repo()

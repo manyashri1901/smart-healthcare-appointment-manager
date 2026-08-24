@@ -413,32 +413,6 @@ class PostgresRepo:
             ).scalars().all()
             return [_dump(r) for r in rows]
 
-    # ------------------------------------------------------------ calendar
-    async def get_calendar_connection(self, user_id: str) -> Optional[dict]:
-        async with self.session() as s:
-            row = (
-                await s.execute(select(m.CalendarConnection).where(m.CalendarConnection.user_id == user_id))
-            ).scalar_one_or_none()
-            return _dump(row)
-
-    async def upsert_calendar_connection(self, user_id: str, patch: dict):
-        async with self.session() as s:
-            existing = (
-                await s.execute(select(m.CalendarConnection).where(m.CalendarConnection.user_id == user_id))
-            ).scalar_one_or_none()
-            if existing:
-                for k, v in patch.items():
-                    setattr(existing, k, v)
-                existing.updated_at = _iso()
-            else:
-                s.add(m.CalendarConnection(user_id=user_id, updated_at=_iso(), **patch))
-            await s.commit()
-
-    async def delete_calendar_connection(self, user_id: str):
-        async with self.session() as s:
-            await s.execute(delete(m.CalendarConnection).where(m.CalendarConnection.user_id == user_id))
-            await s.commit()
-
     # ---------------------------------------------------------------- audit
     async def audit(self, entry: dict):
         async with self.session() as s:

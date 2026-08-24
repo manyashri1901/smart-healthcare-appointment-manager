@@ -1,7 +1,7 @@
 """Notification service — enqueues emails and generates AI summaries.
 
-Every side-effect call (email, LLM, calendar sync) is executed **after** the
-appointment transaction commits, so external failures never block booking.
+Every side-effect call (email, LLM) is executed **after** the appointment
+transaction commits, so external failures never block booking.
 """
 from __future__ import annotations
 import uuid
@@ -11,7 +11,7 @@ from typing import Any
 from .db import repo
 from .integrations import email as email_adapter
 from .integrations import llm as llm_adapter
-from .integrations import calendar as gcal
+from .integrations import calendar as ics
 from . import config
 
 
@@ -26,7 +26,15 @@ def _iso() -> str:
 # ---------------------------------------------------------------------------
 # Email queueing
 # ---------------------------------------------------------------------------
-async def queue_email(kind: str, to: str, subject: str, body: str):
+async def queue_email(
+    kind: str,
+    to: str,
+    subject: str,
+    body: str,
+    attachment_filename: str | None = None,
+    attachment_content: str | None = None,
+    ics_method: str = "REQUEST",
+):
     if not to:
         return
     await repo().enqueue_notification(
@@ -42,6 +50,9 @@ async def queue_email(kind: str, to: str, subject: str, body: str):
             "next_retry_at": _iso(),
             "created_at": _iso(),
             "sent_at": None,
+            "attachment_filename": attachment_filename,
+            "attachment_content": attachment_content,
+            "ics_method": ics_method,
         }
     )
 
@@ -52,7 +63,14 @@ async def process_pending_emails():
         if not email_adapter.configured():
             await repo().update_notification(n["id"], {"status": "UNAVAILABLE", "last_error": "SMTP not configured"})
             continue
-        ok, err = await email_adapter.send_email(n["to_email"], n["subject"], n["body"])
+        ok, err = await email_adapter.send_email(
+            n["to_email"],
+            n["subject"],
+            n["body"],
+            attachment_filename=n.get("attachment_filename"),
+            attachment_content=n.get("attachment_content"),
+            ics_method=n.get("ics_method") or "REQUEST",
+        )
         if ok:
             await repo().update_notification(n["id"], {"status": "SENT", "sent_at": _iso(), "last_error": None})
         else:
@@ -104,34 +122,38 @@ async def generate_post_visit(appt_id: str, clinical: dict):
 
 
 # ---------------------------------------------------------------------------
-# Calendar sync
+# Calendar invites (.ics) — pure/local, no I/O, safe to call synchronously
 # ---------------------------------------------------------------------------
-async def sync_calendar_create(appt: dict):
-    r = repo()
-    doctor = await r.get_user_by_id(appt["doctor_id"])
-    patient = await r.get_user_by_id(appt["patient_id"])
-    title = f"PulseCare consultation · {doctor.get('name') if doctor else 'Doctor'} & {patient.get('name') if patient else 'Patient'}"
-    description = (appt.get("symptoms") or {}).get("chief_complaint", "")
-    for user, field in ((patient, "patient_event_id"), (doctor, "doctor_event_id")):
-        if not user:
-            continue
-        conn = await r.get_calendar_connection(user["id"])
-        if not conn:
-            continue
-        event_id, err = await gcal.create_event(conn, title, appt["start"], appt["end"], description)
-        if event_id:
-            await r.update_appointment(appt["id"], {field: event_id, "calendar_status": "SYNCED"})
-        else:
-            await r.update_appointment(appt["id"], {"calendar_status": "FAILED"})
+def build_appointment_ics(
+    appt: dict,
+    doctor: dict | None,
+    patient: dict | None,
+    method: str = "REQUEST",
+    uid_source: str | None = None,
+    sequence: int = 0,
+) -> str:
+    """Build a .ics invite (REQUEST) or cancellation notice (CANCEL) for an appointment.
 
-
-async def sync_calendar_cancel(appt: dict):
-    r = repo()
-    for user_id, field in ((appt["patient_id"], "patient_event_id"), (appt["doctor_id"], "doctor_event_id")):
-        conn = await r.get_calendar_connection(user_id)
-        event_id = appt.get(field)
-        if conn and event_id:
-            await gcal.delete_event(conn, event_id)
+    ``uid_source`` lets a reschedule reuse the *original* appointment's id as
+    the calendar UID (with a bumped ``sequence``) so calendar clients treat it
+    as an update to the existing event rather than a second, orphaned one.
+    """
+    doctor_name = doctor.get("name") if doctor else "Doctor"
+    patient_name = patient.get("name") if patient else "Patient"
+    summary = f"SmartCare consultation · {doctor_name} & {patient_name}"
+    description = (appt.get("symptoms") or {}).get("chief_complaint") or "SmartCare appointment"
+    attendees = [e for e in [(doctor or {}).get("email"), (patient or {}).get("email")] if e]
+    return ics.build_ics(
+        uid=f"{uid_source or appt['id']}@smartcare.example.com",
+        start_iso=appt["start"],
+        end_iso=appt["end"],
+        summary=summary,
+        description=description,
+        organizer_email=config.MAIL_FROM,
+        attendee_emails=attendees,
+        method=method,
+        sequence=sequence,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -212,9 +234,8 @@ async def process_due_reminders():
 async def _notify_first_eligible_waitlister(doctor_id: str, start: str):
     """Promote the earliest WAITING waitlister for a freed slot to NOTIFIED.
 
-    Skips any entry whose slot has moved into the past. Notification and
-    Google Calendar events happen out-of-band; failures never abort the
-    promotion.
+    Skips any entry whose slot has moved into the past. The notification
+    email happens out-of-band; failures never abort the promotion.
     """
     r = repo()
     from . import config as _config
@@ -241,12 +262,12 @@ async def _notify_first_eligible_waitlister(doctor_id: str, start: str):
         await queue_email(
             "WAITLIST_SLOT_OPEN",
             patient.get("email") if patient else "",
-            "A PulseCare slot just opened for you",
+            "A SmartCare slot just opened for you",
             (
                 f"<p>Hi {patient.get('name') if patient else 'there'},</p>"
                 f"<p>A slot with <strong>{doctor.get('name') if doctor else 'your requested doctor'}</strong> "
                 f"has just opened at <strong>{when}</strong>.</p>"
-                f"<p>You have {_config.WAITLIST_CLAIM_MINUTES} minutes to claim it in PulseCare.</p>"
+                f"<p>You have {_config.WAITLIST_CLAIM_MINUTES} minutes to claim it in SmartCare.</p>"
             ),
         )
         await r.audit(

@@ -1,8 +1,8 @@
-# PulseCare — Healthcare Appointment & Follow-up Manager
+# SmartCare — Healthcare Appointment & Follow-up Manager
 
 Production-style appointment platform with three portals (Patient, Doctor,
 Admin), safe concurrent booking, provider-agnostic AI summaries, medication
-reminders, transactional email, and Google Calendar sync.
+reminders, transactional email, and .ics calendar invites.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ Vercel / static host    │            ├── Repository interface
                         │            │    └── PostgresRepo (DATABASE_URL)
                         │            ├── LLM adapter (Anthropic / OpenAI / Emergent)
                         │            ├── SMTP email adapter (Mailtrap-compatible)
-                        │            ├── Google Calendar OAuth
+                        │            ├── .ics calendar invite builder (RFC 5545)
                         │            └── APScheduler background jobs
                         │
                         └── Optional Celery + Redis workers (production)
@@ -33,10 +33,10 @@ store from MongoDB to PostgreSQL. See `docs/system-design.md`.
 - Symptoms form → pre-visit AI summary → doctor visit → clinical notes → post-visit AI summary
 - Medication reminder scheduling and delivery
 - Transactional email queue with exponential retries
-- Google Calendar OAuth (per user), event create/update/delete
+- Calendar invites via standard `.ics` attachments (RFC 5545) on booking/reschedule/cancellation emails — no OAuth, no external service (see "Calendar invites" below for why)
 - Doctor leave management with cancellation of affected appointments
 - Admin metrics, notification log, audit trail
-- Provider-agnostic integrations — the app is fully usable with no third-party keys, gracefully degrading (AI status becomes `UNAVAILABLE`, calendar sync is skipped, emails are marked `UNAVAILABLE`)
+- Provider-agnostic integrations — the app is fully usable with no third-party keys, gracefully degrading (AI status becomes `UNAVAILABLE`, emails including calendar invites are marked `UNAVAILABLE` if SMTP isn't configured)
 
 ## Technology stack
 
@@ -45,7 +45,7 @@ Backend: FastAPI, Pydantic 2, SQLAlchemy 2 async, Motor, asyncpg
 Auth: bcrypt + JWT (HS256)
 Jobs: APScheduler (preview) / Celery + Redis (production, see `docker-compose.yml`)
 LLM: httpx-based provider-agnostic adapter (Anthropic, OpenAI-compatible, Emergent)
-Calendar: Google OAuth 2.0
+Calendar: standard-library .ics generation (RFC 5545) — no external service
 
 ## Folder structure
 
@@ -73,8 +73,7 @@ Calendar: Google OAuth 2.0
 │   │       ├── auth.py
 │   │       ├── doctors.py
 │   │       ├── appointments.py
-│   │       ├── admin.py
-│   │       └── calendar.py
+│   │       └── admin.py
 │   └── tests/
 ├── frontend/
 │   └── src/App.js
@@ -135,8 +134,7 @@ remains fully functional with none configured.
 | `DATABASE_URL` | If present, PostgreSQL is used |
 | `MONGO_URL` / `DB_NAME` | MongoDB connection when Postgres is not set |
 | `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` | AI adapter |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM` | Email adapter |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Google Calendar OAuth |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM` | Email adapter (also carries calendar `.ics` invites) |
 
 ### LLM setup
 
@@ -151,15 +149,33 @@ remains fully functional with none configured.
 2. Copy SMTP credentials into `.env` (`SMTP_HOST=sandbox.smtp.mailtrap.io`, `SMTP_PORT=587`, `SMTP_USER=…`, `SMTP_PASS=…`).
 3. Notifications are queued during appointment transactions and dispatched by the background worker.
 
-### Google Calendar setup
+### Calendar invites (.ics) — not live Google Calendar sync
 
-1. In [Google Cloud Console](https://console.cloud.google.com) create a project.
-2. Enable **Google Calendar API**.
-3. Configure the **OAuth consent screen** (external, test users).
-4. Create an **OAuth 2.0 Client ID** of type Web Application.
-5. Add redirect URI `${BACKEND_URL}/api/calendar/google/callback`.
-6. Copy Client ID / Secret into `.env`.
-7. Patients & doctors click *Connect Google Calendar* from Settings; PulseCare stores tokens server-side only.
+Calendar integration was originally built as live Google Calendar OAuth sync
+(create/update/delete events via the Calendar API on the user's own
+calendar). We hit a **Google OAuth verification blocker during setup**:
+shipping a Calendar API app in production mode requires Google's OAuth app
+verification, which in turn requires business/billing verification on the
+Google Cloud project. That verification wasn't available in this project's
+setup, and the "test user" allowance for unverified apps caps out at 100
+users and doesn't cover the real deployment target — so live OAuth sync
+wasn't a viable path here.
+
+Instead, SmartCare generates a standard **`.ics` calendar file (RFC 5545)**
+locally — no external API, no OAuth, no account connection required — and
+attaches it to the booking confirmation, reschedule, and cancellation
+emails. Opening the attachment (or most mail clients auto-detecting it) adds
+the event to Google Calendar, Outlook, Apple Calendar, or any other RFC
+5545-compliant calendar app. A reschedule reuses the original event's UID
+with an incremented `SEQUENCE` so calendar clients update the existing
+event rather than creating a duplicate; cancellation sends a `METHOD:CANCEL`
+variant that removes it.
+
+This trades "your calendar always reflects the live appointment state
+automatically" for "you get a real, working calendar invite with zero
+external dependencies or Google approval process to unblock." No setup
+or environment variables are needed for this feature — it works as soon
+as SMTP is configured (see above).
 
 ## Seed data
 
@@ -167,13 +183,13 @@ remains fully functional with none configured.
 
 | Role | Email | Password |
 | --- | --- | --- |
-| Admin | `admin@pulsecare.example.com` | `PulseCare123!` |
-| Doctor | `maya@pulsecare.example.com` (General Physician) | `PulseCare123!` |
-| Doctor | `elias@pulsecare.example.com` (Dermatologist) | `PulseCare123!` |
-| Doctor | `priya@pulsecare.example.com` (Cardiologist) | `PulseCare123!` |
-| Patient | `alex@pulsecare.example.com` | `PulseCare123!` |
-| Patient | `bea@pulsecare.example.com` | `PulseCare123!` |
-| Patient | `chen@pulsecare.example.com` | `PulseCare123!` |
+| Admin | `admin@smartcare.example.com` | `SmartCare123!` |
+| Doctor | `maya@smartcare.example.com` (General Physician) | `SmartCare123!` |
+| Doctor | `elias@smartcare.example.com` (Dermatologist) | `SmartCare123!` |
+| Doctor | `priya@smartcare.example.com` (Cardiologist) | `SmartCare123!` |
+| Patient | `alex@smartcare.example.com` | `SmartCare123!` |
+| Patient | `bea@smartcare.example.com` | `SmartCare123!` |
+| Patient | `chen@smartcare.example.com` | `SmartCare123!` |
 
 ## Running tests
 
@@ -193,14 +209,14 @@ See `docs/api.md` for a curated list of endpoints.
 - **Backend**: Render / Railway (Python service, start command `uvicorn server:app --host 0.0.0.0 --port $PORT`)
 - **Database**: managed PostgreSQL (set `DATABASE_URL`)
 - **Redis / Celery workers**: managed Redis + worker service running `celery -A app.celery_app worker`
-- Configure `FRONTEND_URL`, `BACKEND_URL`, `GOOGLE_REDIRECT_URI` and CORS accordingly.
+- Configure `FRONTEND_URL`, `BACKEND_URL`, and CORS accordingly.
 
 ## Troubleshooting
 
 - **Index conflicts on Mongo**: drop legacy indexes with `db.<collection>.dropIndex(<name>)` — new startup will recreate them.
 - **`Slot is no longer available`**: expected when a concurrent booking has already taken the slot. The UI refreshes availability automatically.
 - **AI summaries stuck at `PENDING`**: LLM credentials missing/invalid — status will move to `UNAVAILABLE` / `FAILED`.
-- **Google `redirect_uri_mismatch`**: ensure `GOOGLE_REDIRECT_URI` exactly matches the Cloud Console configuration.
+- **No `.ics` attachment arrived**: SMTP isn't configured (`SMTP_HOST`/`SMTP_USER`/`SMTP_PASS`) — the notification row will show `status=UNAVAILABLE`. The `.ics` is still generated correctly; it just has nothing to ride along on until SMTP is set.
 
 ## Known limitations
 

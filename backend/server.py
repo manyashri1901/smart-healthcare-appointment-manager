@@ -1,4 +1,4 @@
-"""PulseCare API — main FastAPI application."""
+"""SmartCare API — main FastAPI application."""
 from contextlib import asynccontextmanager
 import logging
 
@@ -10,7 +10,6 @@ from app.db import repo, init_repo, close_repo
 from app.jobs import build_scheduler
 from app.seed import seed
 from app.routes import auth, doctors, appointments, admin
-from app.routes import calendar as calendar_routes
 from app.routes import waitlist as waitlist_routes
 
 logging.basicConfig(level=logging.INFO)
@@ -24,7 +23,7 @@ async def lifespan(app: FastAPI):
     scheduler = build_scheduler()
     scheduler.start()
     app.state.scheduler = scheduler
-    log.info("PulseCare started · db=%s", repo().kind)
+    log.info("SmartCare started · db=%s", repo().kind)
     try:
         yield
     finally:
@@ -32,7 +31,7 @@ async def lifespan(app: FastAPI):
         await close_repo()
 
 
-app = FastAPI(title="PulseCare API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="SmartCare API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,7 +59,6 @@ api.include_router(auth.router)
 api.include_router(doctors.router)
 api.include_router(appointments.router)
 api.include_router(admin.router)
-api.include_router(calendar_routes.router)
 api.include_router(waitlist_routes.router)
 
 app.include_router(api)

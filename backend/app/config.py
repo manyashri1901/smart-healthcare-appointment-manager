@@ -33,12 +33,7 @@ SMTP_HOST = env("SMTP_HOST")
 SMTP_PORT = int(env("SMTP_PORT", "587") or 587)
 SMTP_USER = env("SMTP_USER")
 SMTP_PASS = env("SMTP_PASS")
-MAIL_FROM = env("MAIL_FROM", "no-reply@pulsecare.example.com")
-
-# Google Calendar OAuth
-GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = env("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = env("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/api/calendar/google/callback")
+MAIL_FROM = env("MAIL_FROM", "no-reply@smartcare.example.com")
 
 # Slot hold TTL
 SLOT_HOLD_MINUTES = int(env("SLOT_HOLD_MINUTES", "5") or 5)

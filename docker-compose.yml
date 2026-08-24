@@ -39,9 +39,6 @@ services:
       SMTP_PORT: "587"
       SMTP_USER: ""
       SMTP_PASS: ""
-      GOOGLE_CLIENT_ID: ""
-      GOOGLE_CLIENT_SECRET: ""
-      GOOGLE_REDIRECT_URI: "http://localhost:8001/api/calendar/google/callback"
     ports: ["8001:8001"]
     depends_on: [postgres, redis]
 

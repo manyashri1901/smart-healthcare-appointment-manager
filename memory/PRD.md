@@ -1,4 +1,4 @@
-# PulseCare — Product Requirements Document
+.\.venv\Scripts\Activate.ps1# SmartCare — Product Requirements Document
 
 ## Original Problem
 Build a production-style Healthcare Appointment & Follow-up Manager with
@@ -18,7 +18,6 @@ sync, background jobs, and deployment configuration.
   fallback to `UNAVAILABLE`)
 - **Email adapter**: SMTP (Mailtrap-compatible), exponential retries
 - **Calendar adapter**: Google OAuth 2.0 (server-side tokens only)
-
 ## Delivered (2026-02-22)
 - Modular backend package: `backend/app/{config,security,schemas,services,jobs,seed}.py`, `db/{mongo_repo,postgres_repo,postgres_models}.py`, `integrations/{llm,email,calendar}.py`, `routes/{auth,doctors,appointments,admin,calendar}.py`
 - Repository interface swappable via `DATABASE_URL`

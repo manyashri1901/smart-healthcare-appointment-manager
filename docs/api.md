@@ -1,4 +1,4 @@
-# PulseCare API
+# SmartCare API
 
 Full Swagger UI is available at `${BACKEND_URL}/docs`.
 
@@ -42,13 +42,14 @@ Every route below is prefixed with `/api`. Auth-protected routes require the
 {"detail": "This slot is no longer available"}
 ```
 
-## Google Calendar
-| Method | Path | Role | Notes |
-| --- | --- | --- | --- |
-| GET | `/calendar/status` | Any auth | Returns `{configured, connected}` |
-| GET | `/calendar/google/connect` | Any auth | Returns `{url}` — redirect the user |
-| GET | `/calendar/google/callback` | – | OAuth redirect endpoint |
-| DELETE | `/calendar/google/disconnect` | Any auth | Removes tokens |
+## Calendar invites
+
+There is no calendar API — no routes, no OAuth, no per-user connection.
+`POST /appointments/confirm`, `PATCH /appointments/{id}/reschedule`, and
+`PATCH /appointments/{id}/cancel` each generate a standard `.ics` file
+(RFC 5545) locally and attach it to the email that route already sends
+(`BOOKING_CONFIRMED`, `APPOINTMENT_RESCHEDULED`, `APPOINTMENT_CANCELLED`).
+See `docs/system-design.md` for why this replaced live Google Calendar sync.
 
 ## Admin
 | Method | Path | Body | Role |
@@ -79,5 +80,5 @@ Every route below is prefixed with `/api`. Auth-protected routes require the
 
 All errors respond with FastAPI's default `{"detail": "..."}` and standard
 HTTP codes: 400 (bad request), 401 (unauthenticated), 403 (forbidden), 404
-(not found), 409 (conflict / slot unavailable), 422 (validation), 503
-(integration not configured).
+(not found), 409 (conflict / slot unavailable), 422 (validation), 500
+(unexpected server error — see the booking endpoints' error handling).

@@ -78,7 +78,7 @@ async def add_leave(doctor_id: str, data: LeaveRequest, background: BackgroundTa
         await services.queue_email(
             "LEAVE_CONFLICT",
             patient.get("email") if patient else "",
-            "Your PulseCare appointment needs to be rescheduled",
+            "Your SmartCare appointment needs to be rescheduled",
             f"<p>Unfortunately your appointment on {data.date} is cancelled as your doctor is on leave. Please reschedule at your convenience.</p>",
         )
         background.add_task(services.sync_calendar_cancel, appt)
@@ -129,7 +129,7 @@ async def insights_csv(days: int = 7, user=Depends(require_role("ADMIN"))):
     buf = io.StringIO()
     w = csv.writer(buf)
     generated = datetime.now(timezone.utc).isoformat()
-    w.writerow(["PulseCare Cancellation & Waitlist Report"])
+    w.writerow(["SmartCare Cancellation & Waitlist Report"])
     w.writerow(["Generated at", generated])
     w.writerow(["Window (days)", days])
     w.writerow([])
@@ -150,7 +150,7 @@ async def insights_csv(days: int = 7, user=Depends(require_role("ADMIN"))):
     for row in data.get("cancellations_by_day", []):
         w.writerow([row["date"], row["count"]])
     csv_body = buf.getvalue()
-    filename = f"pulsecare-insights-{days}d-{generated[:10]}.csv"
+    filename = f"smartcare-insights-{days}d-{generated[:10]}.csv"
     return Response(
         content=csv_body,
         media_type="text/csv",

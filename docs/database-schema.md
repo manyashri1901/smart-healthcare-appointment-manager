@@ -1,4 +1,4 @@
-# PulseCare Database Schema
+# SmartCare Database Schema
 
 Two backends are supported. The logical schema below is identical in both;
 column names use the PostgreSQL definitions from
@@ -39,8 +39,6 @@ Unique: `(doctor_id, date)`.
 | symptoms | jsonb | see Symptoms form |
 | ai_status | text | `PENDING` / `COMPLETED` / `FAILED` / `UNAVAILABLE` |
 | notification_status | text | |
-| calendar_status | text | |
-| patient_event_id, doctor_event_id | text | Google Calendar event IDs |
 | created_at | timestamptz | |
 
 **Critical constraint**: partial unique index
@@ -89,6 +87,9 @@ Composite PK: `(appointment_id, kind)`.
 | status | text | `PENDING` / `RETRY` / `SENT` / `FAILED` / `UNAVAILABLE` |
 | retry_count, last_error | int / text |
 | next_retry_at, created_at, sent_at | text |
+| attachment_filename | text | nullable — set when a `.ics` invite rides along |
+| attachment_content | text | nullable — raw `.ics` file content |
+| ics_method | text | nullable — `REQUEST` or `CANCEL` |
 Index: `(status, next_retry_at)`.
 
 ## medication_reminders
@@ -103,16 +104,6 @@ Index: `(status, next_retry_at)`.
 | sent_at | text |
 Index: `(status, scheduled_at)`.
 
-## calendar_connections
-| column | type |
-| --- | --- |
-| user_id | text PK |
-| access_token, refresh_token, scope | text |
-| token_expiry | text |
-| updated_at | text |
-
-Tokens are stored server-side only. No API route exposes them to clients.
-
 ## audit_logs
 | column | type |
 | --- | --- |
@@ -125,7 +116,7 @@ Tokens are stored server-side only. No API route exposes them to clients.
 
 Common actions: `USER_REGISTERED`, `APPOINTMENT_CREATED`,
 `APPOINTMENT_CANCELLED`, `APPOINTMENT_RESCHEDULED`, `SLOT_HOLD_CREATED`,
-`DOCTOR_LEAVE_CREATED`, `CALENDAR_CONNECTED`, `VISIT_COMPLETED`,
+`DOCTOR_LEAVE_CREATED`, `VISIT_COMPLETED`,
 `WAITLIST_JOINED`, `WAITLIST_NOTIFIED`, `WAITLIST_CLAIMED`,
 `WAITLIST_CLAIM_EXPIRED`, `WAITLIST_CANCELLED`.
 

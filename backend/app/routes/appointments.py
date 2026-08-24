@@ -1,4 +1,5 @@
 """Appointment lifecycle: hold, confirm, cancel, reschedule, clinical notes."""
+import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -8,6 +9,7 @@ from ..schemas import HoldRequest, ConfirmRequest, ClinicalRequest, RescheduleRe
 from ..security import current_user, require_role, now
 from .. import services, config
 
+log = logging.getLogger("appointments")
 router = APIRouter()
 
 
@@ -44,7 +46,7 @@ async def hold(data: HoldRequest, user=Depends(require_role("PATIENT"))):
         "end": data.end.isoformat(),
         "status": "HELD",
         "expires_at": (now() + timedelta(minutes=config.SLOT_HOLD_MINUTES)).isoformat(),
-        "created_at": now().isoformat(),
+        "created_at": now(),
         "updated_at": None,
     }
     # Pre-check existing appointments (Postgres does this inside the transaction;
@@ -52,7 +54,11 @@ async def hold(data: HoldRequest, user=Depends(require_role("PATIENT"))):
     busy = await r.busy_starts(data.doctor_id)
     if hold_doc["start"] in busy:
         raise HTTPException(409, "This slot is no longer available")
-    result = await r.create_hold(hold_doc)
+    try:
+        result = await r.create_hold(hold_doc)
+    except Exception:
+        log.exception("Unexpected error creating slot hold for doctor=%s start=%s", data.doctor_id, hold_doc["start"])
+        raise HTTPException(500, "We couldn't hold this slot due to an unexpected error. Please try again.")
     if not result:
         raise HTTPException(409, "This slot is no longer available")
     await r.audit({"user_id": user["id"], "action": "SLOT_HOLD_CREATED", "entity_id": result["id"], "timestamp": now().isoformat()})
@@ -82,33 +88,43 @@ async def confirm(data: ConfirmRequest, background: BackgroundTasks, user=Depend
         },
         "ai_status": "PENDING",
         "notification_status": "PENDING",
-        "calendar_status": "PENDING",
         "created_at": now(),
     }
-    created = await r.create_appointment(appt)
+    try:
+        created = await r.create_appointment(appt)
+    except Exception:
+        log.exception("Unexpected error creating appointment for hold=%s", data.hold_id)
+        raise HTTPException(500, "We couldn't confirm this appointment due to an unexpected error. Please try again.")
     if not created:
         raise HTTPException(409, "This slot is no longer available")
 
     await r.audit({"user_id": user["id"], "action": "APPOINTMENT_CREATED", "entity_id": appt["id"], "timestamp": now().isoformat()})
 
-    # Enqueue email + AI + calendar AFTER commit. Never block booking on them.
+    # Enqueue email + AI AFTER commit. Never block booking on them.
     doctor = await r.get_user_by_id(hold_doc["doctor_id"])
     patient_email = user.get("email")
     doctor_email = doctor.get("email") if doctor else None
     when = appt["start"]
+    invite_ics = services.build_appointment_ics(appt, doctor, user, method="REQUEST")
     await services.queue_email(
         "BOOKING_CONFIRMED", patient_email,
-        "Your PulseCare appointment is confirmed",
-        f"<p>Your appointment with {doctor.get('name') if doctor else 'your doctor'} is confirmed for {when}.</p>",
+        "Your SmartCare appointment is confirmed",
+        f"<p>Your appointment with {doctor.get('name') if doctor else 'your doctor'} is confirmed for {when}.</p>"
+        f"<p>A calendar invite (.ics) is attached — most calendar apps will add it automatically.</p>",
+        attachment_filename="smartcare-appointment.ics",
+        attachment_content=invite_ics,
+        ics_method="REQUEST",
     )
     if doctor_email:
         await services.queue_email(
             "BOOKING_NOTIFY_DOCTOR", doctor_email,
-            "New PulseCare appointment",
+            "New SmartCare appointment",
             f"<p>New consultation booked for {when} with {user.get('name')}.</p>",
+            attachment_filename="smartcare-appointment.ics",
+            attachment_content=invite_ics,
+            ics_method="REQUEST",
         )
     background.add_task(services.generate_pre_visit, appt)
-    background.add_task(services.sync_calendar_create, appt)
     return created
 
 
@@ -164,7 +180,28 @@ async def cancel(appointment_id: str, background: BackgroundTasks, user=Depends(
         raise HTTPException(404, "Appointment not found")
     await r.update_appointment(appointment_id, {"status": "CANCELLED"})
     await r.audit({"user_id": user["id"], "action": "APPOINTMENT_CANCELLED", "entity_id": appointment_id, "timestamp": now().isoformat()})
-    background.add_task(services.sync_calendar_cancel, item)
+
+    patient = await r.get_user_by_id(item["patient_id"])
+    doctor = await r.get_user_by_id(item["doctor_id"])
+    cancel_ics = services.build_appointment_ics(item, doctor, patient, method="CANCEL")
+    if patient and patient.get("email"):
+        await services.queue_email(
+            "APPOINTMENT_CANCELLED", patient["email"],
+            "Your SmartCare appointment was cancelled",
+            f"<p>Your appointment on {item['start']} has been cancelled.</p>",
+            attachment_filename="smartcare-appointment-cancelled.ics",
+            attachment_content=cancel_ics,
+            ics_method="CANCEL",
+        )
+    if doctor and doctor.get("email"):
+        await services.queue_email(
+            "APPOINTMENT_CANCELLED", doctor["email"],
+            "A SmartCare appointment was cancelled",
+            f"<p>The appointment on {item['start']} with {patient.get('name') if patient else 'a patient'} has been cancelled.</p>",
+            attachment_filename="smartcare-appointment-cancelled.ics",
+            attachment_content=cancel_ics,
+            ics_method="CANCEL",
+        )
     background.add_task(services.promote_waitlist_for_freed_slot, item["doctor_id"], item["start"])
     return {"status": "CANCELLED"}
 
@@ -181,14 +218,46 @@ async def reschedule(appointment_id: str, data: RescheduleRequest, background: B
     # Attempt atomic move — put current row into CANCELLED then create a new one.
     await r.update_appointment(appointment_id, {"status": "CANCELLED"})
     new_appt = {**item, "id": str(uuid.uuid4()), "start": data.start.isoformat(), "end": data.end.isoformat(), "status": "CONFIRMED", "created_at": now()}
-    created = await r.create_appointment(new_appt)
+    try:
+        created = await r.create_appointment(new_appt)
+    except Exception:
+        # roll back — reactivate original
+        await r.update_appointment(appointment_id, {"status": "CONFIRMED"})
+        log.exception("Unexpected error creating rescheduled appointment for appointment_id=%s", appointment_id)
+        raise HTTPException(500, "We couldn't reschedule this appointment due to an unexpected error. Please try again.")
     if not created:
         # roll back — reactivate original
         await r.update_appointment(appointment_id, {"status": "CONFIRMED"})
         raise HTTPException(409, "This slot is no longer available")
     await r.audit({"user_id": user["id"], "action": "APPOINTMENT_RESCHEDULED", "entity_id": created["id"], "timestamp": now().isoformat()})
-    background.add_task(services.sync_calendar_cancel, item)
-    background.add_task(services.sync_calendar_create, created)
+
+    patient = await r.get_user_by_id(item["patient_id"])
+    doctor = await r.get_user_by_id(item["doctor_id"])
+    # Reuse the original appointment's id as the calendar UID (bumped SEQUENCE)
+    # so calendar clients update the existing event instead of adding a
+    # second, orphaned one for the new internal row id.
+    updated_ics = services.build_appointment_ics(
+        created, doctor, patient, method="REQUEST", uid_source=item["id"], sequence=1
+    )
+    if patient and patient.get("email"):
+        await services.queue_email(
+            "APPOINTMENT_RESCHEDULED", patient["email"],
+            "Your SmartCare appointment was rescheduled",
+            f"<p>Your appointment has moved from {item['start']} to {created['start']}.</p>"
+            f"<p>An updated calendar invite (.ics) is attached.</p>",
+            attachment_filename="smartcare-appointment.ics",
+            attachment_content=updated_ics,
+            ics_method="REQUEST",
+        )
+    if doctor and doctor.get("email"):
+        await services.queue_email(
+            "APPOINTMENT_RESCHEDULED", doctor["email"],
+            "A SmartCare appointment was rescheduled",
+            f"<p>The appointment with {patient.get('name') if patient else 'a patient'} has moved from {item['start']} to {created['start']}.</p>",
+            attachment_filename="smartcare-appointment.ics",
+            attachment_content=updated_ics,
+            ics_method="REQUEST",
+        )
     background.add_task(services.promote_waitlist_for_freed_slot, item["doctor_id"], item["start"])
     return created
 
@@ -219,8 +288,8 @@ async def clinical_notes(appointment_id: str, data: ClinicalRequest, background:
     await services.queue_email(
         "VISIT_COMPLETED",
         patient.get("email") if patient else "",
-        "Your PulseCare visit summary",
-        "<p>Your visit summary and prescription are now available in PulseCare.</p>",
+        "Your SmartCare visit summary",
+        "<p>Your visit summary and prescription are now available in SmartCare.</p>",
     )
     return {"status": "COMPLETED"}
 

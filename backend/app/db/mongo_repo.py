@@ -244,18 +244,6 @@ class MongoRepo:
             )
         ]
 
-    # ------------------------------------------------------------ calendar
-    async def get_calendar_connection(self, user_id: str) -> Optional[dict]:
-        return _clean(await self.db.calendar_connections.find_one({"user_id": user_id}))
-
-    async def upsert_calendar_connection(self, user_id: str, patch: dict):
-        await self.db.calendar_connections.update_one(
-            {"user_id": user_id}, {"$set": {"user_id": user_id, **patch}}, upsert=True
-        )
-
-    async def delete_calendar_connection(self, user_id: str):
-        await self.db.calendar_connections.delete_one({"user_id": user_id})
-
     # ---------------------------------------------------------------- audit
     async def audit(self, entry: dict):
         await self.db.audit.insert_one(entry)

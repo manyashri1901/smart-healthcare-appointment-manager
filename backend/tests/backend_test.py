@@ -12,10 +12,10 @@ import pytest
 
 
 API = os.environ.get("PULSECARE_API", "http://localhost:8001/api")
-PATIENT = ("alex@pulsecare.example.com", "PulseCare123!")
-PATIENT_B = ("bea@pulsecare.example.com", "PulseCare123!")
-DOCTOR = ("maya@pulsecare.example.com", "PulseCare123!")
-ADMIN = ("admin@pulsecare.example.com", "PulseCare123!")
+PATIENT = ("alex@smartcare.example.com", "SmartCare123!")
+PATIENT_B = ("bea@smartcare.example.com", "SmartCare123!")
+DOCTOR = ("maya@smartcare.example.com", "SmartCare123!")
+ADMIN = ("admin@smartcare.example.com", "SmartCare123!")
 
 
 def next_weekday(days_ahead=1):
