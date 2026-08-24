@@ -24,7 +24,7 @@ Every route below is prefixed with `/api`. Auth-protected routes require the
 | GET | `/doctors` | `?specialization=` | Any authenticated |
 | GET | `/doctors/{id}` | | Any authenticated |
 | GET | `/doctors/{id}/availability` | `?date=YYYY-MM-DD` | Any authenticated |
-
+| GET | `/doctors/{id}/leaves` | | Any authenticated | Leave dates for calendar blocking |
 ## Appointments
 | Method | Path | Body | Role | Notes |
 | --- | --- | --- | --- | --- |

@@ -24,6 +24,24 @@ Business logic and API routes never touch a database driver directly — they
 call the repository interface. Setting `DATABASE_URL` switches the backing
 store from MongoDB to PostgreSQL. See `docs/system-design.md`.
 
+## Screenshots
+
+### Doctor — Schedule (Calendar view)
+![Doctor calendar view](docs/screenshots/doctor-calendar.png)
+List/Calendar toggle with confirmed appointments and leave days blocked out.
+
+### Patient — Appointments
+![Patient appointments](docs/screenshots/patient-appointments.png)
+Color-coded calendar view across all of a patient's doctors.
+
+### Booking flow — symptom intake
+![Booking form](docs/screenshots/booking-form.png)
+Slot hold countdown, symptom form, and severity selector before confirmation.
+
+### Settings — Account
+![Account settings](docs/screenshots/account-settings.png)
+Role-aware account info — specialty shown for doctors, hidden for patients.
+
 ## Features
 
 - JWT auth, role-based authorization (PATIENT / DOCTOR / ADMIN)
@@ -34,6 +52,7 @@ store from MongoDB to PostgreSQL. See `docs/system-design.md`.
 - Medication reminder scheduling and delivery
 - Transactional email queue with exponential retries
 - Calendar invites via standard `.ics` attachments (RFC 5545) on booking/reschedule/cancellation emails — no OAuth, no external service (see "Calendar invites" below for why)
+- Built-in in-app calendar view (List/Calendar toggle) on the Appointments page for both doctors and patients — no email required to see your schedule
 - Doctor leave management with cancellation of affected appointments
 - Admin metrics, notification log, audit trail
 - Provider-agnostic integrations — the app is fully usable with no third-party keys, gracefully degrading (AI status becomes `UNAVAILABLE`, emails including calendar invites are marked `UNAVAILABLE` if SMTP isn't configured)
@@ -80,7 +99,8 @@ Calendar: standard-library .ics generation (RFC 5545) — no external service
 ├── docs/
 │   ├── system-design.md
 │   ├── database-schema.md
-│   └── api.md
+│   ├── api.md
+│   └── screenshots/
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -90,7 +110,7 @@ Calendar: standard-library .ics generation (RFC 5545) — no external service
 
 ```bash
 git clone <repo>
-cd pulsecare
+cd smart-healthcare-appointment-manager
 cp .env.example backend/.env
 
 # Backend
@@ -108,8 +128,8 @@ yarn start
 ### PostgreSQL setup
 
 ```bash
-docker run -d --name pulsecare-pg -e POSTGRES_PASSWORD=pulse -p 5432:5432 postgres:16
-export DATABASE_URL=postgresql://postgres:pulse@localhost:5432/pulsecare
+docker run -d --name smartcare-pg -e POSTGRES_PASSWORD=smartcare -p 5432:5432 postgres:16
+export DATABASE_URL=postgresql://postgres:smartcare@localhost:5432/smartcare
 ```
 
 Schema is created automatically on first boot via `Base.metadata.create_all`.
@@ -175,7 +195,8 @@ This trades "your calendar always reflects the live appointment state
 automatically" for "you get a real, working calendar invite with zero
 external dependencies or Google approval process to unblock." No setup
 or environment variables are needed for this feature — it works as soon
-as SMTP is configured (see above).
+as SMTP is configured (see above). For users who'd rather not leave the
+app at all, the Appointments page also has a built-in Calendar view.
 
 ## Seed data
 
