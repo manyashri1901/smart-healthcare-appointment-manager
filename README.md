@@ -27,20 +27,13 @@ store from MongoDB to PostgreSQL. See `docs/system-design.md`.
 ## Screenshots
 
 ### Doctor — Schedule (Calendar view)
-![Doctor calendar view](docs/screenshots/doctor-calendar.png)
+<img width="1919" height="910" alt="image" src="https://github.com/user-attachments/assets/18554552-d378-4132-8193-168c592b9476" />
 List/Calendar toggle with confirmed appointments and leave days blocked out.
 
 ### Patient — Appointments
 <img width="1919" height="912" alt="image" src="https://github.com/user-attachments/assets/317252de-4660-47e8-abb3-1824ac631216" />
 Color-coded calendar view across all of a patient's doctors.
 
-### Booking flow — symptom intake
-![Booking form](docs/screenshots/booking-form.png)
-Slot hold countdown, symptom form, and severity selector before confirmation.
-
-### Settings — Account
-![Account settings](docs/screenshots/account-settings.png)
-Role-aware account info — specialty shown for doctors, hidden for patients.
 
 ## Features
 
@@ -169,36 +162,35 @@ remains fully functional with none configured.
 1. Create a Mailtrap sandbox inbox.
 2. Copy SMTP credentials into `.env` (`SMTP_HOST=sandbox.smtp.mailtrap.io`, `SMTP_PORT=587`, `SMTP_USER=…`, `SMTP_PASS=…`).
 3. Notifications are queued during appointment transactions and dispatched by the background worker.
+### Calendar Integration — Native In-App Calendar
 
-### Calendar invites (.ics) — not live Google Calendar sync
+SmartCare provides a **native calendar directly within the application** for
+both Patient and Doctor portals.
 
-Calendar integration was originally built as live Google Calendar OAuth sync
-(create/update/delete events via the Calendar API on the user's own
-calendar). We hit a **Google OAuth verification blocker during setup**:
-shipping a Calendar API app in production mode requires Google's OAuth app
-verification, which in turn requires business/billing verification on the
-Google Cloud project. That verification wasn't available in this project's
-setup, and the "test user" allowance for unverified apps caps out at 100
-users and doesn't cover the real deployment target — so live OAuth sync
-wasn't a viable path here.
+The calendar does not depend on Google Calendar, Google Cloud OAuth, external
+calendar APIs, or `.ics` files. Users can manage and track their appointments
+entirely within SmartCare.
 
-Instead, SmartCare generates a standard **`.ics` calendar file (RFC 5545)**
-locally — no external API, no OAuth, no account connection required — and
-attaches it to the booking confirmation, reschedule, and cancellation
-emails. Opening the attachment (or most mail clients auto-detecting it) adds
-the event to Google Calendar, Outlook, Apple Calendar, or any other RFC
-5545-compliant calendar app. A reschedule reuses the original event's UID
-with an incremented `SEQUENCE` so calendar clients update the existing
-event rather than creating a duplicate; cancellation sends a `METHOD:CANCEL`
-variant that removes it.
+The built-in calendar supports:
+- **List View** — View appointments chronologically with complete appointment details.
+- **Weekly View** — View appointments across the selected week.
+- **Monthly View** — View the complete monthly appointment schedule.
+- Appointment status tracking
+- Booked appointment visibility
+- Cancelled appointment visibility
+- Completed appointment visibility
+- Appointment scheduling and management
 
-This trades "your calendar always reflects the live appointment state
-automatically" for "you get a real, working calendar invite with zero
-external dependencies or Google approval process to unblock." No setup
-or environment variables are needed for this feature — it works as soon
-as SMTP is configured (see above). For users who'd rather not leave the
-app at all, the Appointments page also has a built-in Calendar view.
+The calendar is integrated directly with the SmartCare appointment system, so
+appointment information displayed in the calendar is based on the application's
+current appointment data.
 
+This provides a self-contained calendar experience without requiring users to
+connect an external calendar service.
+
+> **Implementation Note:** Google Calendar API integration and Google OAuth 2.0
+> synchronization are not included in the current implementation. The calendar
+> functionality is provided entirely through SmartCare's native in-app calendar.
 ## Seed data
 
 `app/seed.py` runs at startup. Test credentials (dev only):
