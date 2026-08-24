@@ -1,125 +1,163 @@
 # SmartCare System Design
 
-Word count target: ≤ 800.
+## A. Concurrent Appointment Booking and Double-Booking Prevention
 
-## A. Double-Booking Prevention
+SmartCare uses **PostgreSQL as the transactional source of truth** for appointment scheduling. Availability checks at the application layer are treated as advisory; the final concurrency guarantee is enforced by the database.
 
-Two patients can click the same 30-minute slot at the same millisecond.
-Because network latency between the browsers is unequal, both requests can
-reach the API in parallel and pass any client-side availability check.
-SmartCare enforces uniqueness in the storage layer so exactly one of the two
-requests can succeed.
+The `appointments` table defines a partial unique index on `(doctor_id, start)` for active appointments:
 
-**PostgreSQL adapter.** The `appointments` table declares a partial unique
-index: `UNIQUE(doctor_id, start) WHERE status IN ('HELD','CONFIRMED')`. The
-booking flow runs inside an async transaction that (1) locks any competing
-`HELD` hold row with `SELECT … FOR UPDATE`, (2) checks for a pre-existing
-active appointment, then (3) inserts the appointment. A concurrent second
-transaction either finds the locked row or triggers a unique-constraint
-`IntegrityError`; in both cases the API responds `409 SLOT_UNAVAILABLE`. Only
-after commit does the API dispatch downstream work (email, AI, calendar).
+`UNIQUE (doctor_id, start) WHERE status IN ('HELD', 'CONFIRMED')`
 
-**MongoDB adapter.** A partial unique index on `holds` and `appointments`
-covers the same `(doctor_id, start)` tuple restricted to active statuses.
-`create_hold` performs an atomic `insert_one`; a duplicate-key exception is
-translated to a `409`. The service layer additionally consults `busy_starts`
-before creating the hold, ensuring the pre-check and insert are effectively
-serialized. `find_one_and_update` is used to atomically flip the hold from
-`HELD` to `CONSUMED` at confirmation time.
+The booking service executes critical operations within an asynchronous database transaction. It validates the requested slot, checks for an existing active appointment or hold, and persists the booking. Row-level locking (`SELECT ... FOR UPDATE`) is used when an existing competing hold must be serialized.
 
-The single guarantee is: **there is never more than one active
-(HELD or CONFIRMED) row for a given (doctor_id, appointment_start).**
+If concurrent transactions attempt to reserve the same slot, PostgreSQL's unique constraint permits only one transaction to establish the active booking. A resulting `IntegrityError` is caught by the service layer and returned as `409 SLOT_UNAVAILABLE`.
 
-## B. Doctor Leave Conflict Handling
+This provides the following invariant:
 
-When an admin registers a leave date:
+> For a given `doctor_id` and appointment start time, at most one appointment may have an active `HELD` or `CONFIRMED` status.
 
-1. Validate the doctor exists.
-2. Find all `CONFIRMED` appointments whose `start` prefix matches the leave
-   date. This is a cheap indexed lookup on `(doctor_id, start)`.
-3. Persist the leave record (idempotent upsert on the composite key).
-4. For each affected appointment: mark it `CANCELLED` with reason
-   `DOCTOR_LEAVE` and enqueue a `LEAVE_CONFLICT` email to the patient.
-5. Write an `audit_logs` row capturing the affected count.
-6. New availability queries automatically exclude the leave date via the
-   `leaves` collection/table.
+Downstream operations such as notifications and AI processing are initiated only after the booking transaction has committed successfully.
 
-Because the leave upsert and appointment cancellation happen sequentially in
-the request handler while the notification email is only *enqueued* (sent
-later by the background worker), an SMTP outage does not block the leave
-being recorded.
+---
 
-## C. Slot Hold Mechanism
+## B. Doctor Leave and Appointment Conflict Management
 
-Holds implement a lightweight optimistic reservation so that a patient can
-walk through the symptom form without racing another patient for the same
-slot.
+Doctor leave is persisted in the `doctor_leaves` table using a unique `(doctor_id, date)` constraint, making leave registration idempotent.
 
-```
-AVAILABLE ─► POST /appointments/hold ─► HELD (expires_at = now + 5 min)
-HELD      ─► POST /appointments/confirm ─► CONSUMED + CONFIRMED appointment
-HELD      ─► APScheduler ─► EXPIRED (after expires_at)
-```
+When leave is created, the service:
 
-Confirmation atomically flips the hold from `HELD` to `CONSUMED` and inserts
-the appointment. If the hold has already expired the transition fails and the
-API returns `409` — the appointment insert is never attempted.
+1. Validates the doctor.
+2. Retrieves affected `CONFIRMED` appointments for the specified doctor and date.
+3. Persists the leave record.
+4. Updates affected appointments to `CANCELLED` with the cancellation reason `DOCTOR_LEAVE`.
+5. Creates `LEAVE_CONFLICT` notification records for affected patients.
+6. Records the operation in `audit_logs`.
 
-An APScheduler job runs every 30 seconds to sweep `HELD` holds whose
-`expires_at` has passed and marks them `EXPIRED`. Even without this job the
-system is correct because availability queries always ignore holds whose
-`expires_at <= now()`. The sweep exists so admins see clean state and holds
-never occupy a partial unique index slot forever.
+The `(doctor_id, start)` appointment index supports efficient identification of affected appointments.
 
-## D. Notification Failure Handling
+Availability queries consult the `doctor_leaves` table and exclude slots falling within registered leave dates.
 
-Emails and AI generation are strictly **post-transactional**. The
-appointment commit is durable *before* either runs:
+Notification delivery is decoupled from the leave operation. The database state is therefore committed independently of SMTP availability or notification-processing failures.
 
-```
-tx commit ─► build .ics invite (local, synchronous, cannot fail on I/O)
-          ─► enqueue email row (status=PENDING, next_retry_at=now, .ics attached)
-          ─► BackgroundTasks: LLM pre-visit generation
+---
+
+## C. Temporary Slot Reservation
+
+SmartCare implements a five-minute temporary hold mechanism to prevent a selected slot from being claimed by another patient while the current patient completes the booking workflow.
+
+The hold lifecycle is:
+
+```text
+AVAILABLE
+    │
+    ▼
+POST /appointments/hold
+    │
+    ▼
+HELD ───────────────► CONSUMED
+ │                         │
+ │                         ▼
+ │                    CONFIRMED
+ │
+ ▼
+EXPIRED
 ```
 
-The `process_pending_emails` job picks up rows where `status IN
-{PENDING,RETRY}` and `next_retry_at <= now()`. If SMTP is unconfigured the
-row is marked `UNAVAILABLE`. If sending fails the row is rescheduled with an
-exponential backoff — attempt 1 waits 1 minute, attempt 2 five minutes,
-attempt 3 fifteen minutes. After `NOTIFICATION_MAX_RETRIES` the row is
-`FAILED`; the appointment itself is untouched.
+A hold contains `doctor_id`, `patient_id`, `start`, `end`, `expires_at`, and its current status.
 
-The LLM adapter is provider-agnostic: `LLM_PROVIDER ∈ {anthropic, openai,
-emergent}`. Any exception (missing key, invalid JSON, HTTP error, timeout)
-is caught and the AI summary row records `status=FAILED` with a truncated
-error string. Doctors always see the *original* patient symptoms; the AI
-result is presented alongside as an aid, never a replacement.
+The confirmation operation validates that the hold is still active and performs the `HELD → CONSUMED` transition atomically before finalizing the appointment.
 
-### Calendar integration: .ics invites, not live Google Calendar sync
+If the hold has expired or is no longer valid, confirmation returns `409` and the appointment creation path is not executed.
 
-This was originally built as live Google Calendar OAuth sync (per-user
-token storage, `create`/`update`/`delete` against the Calendar API). That's
-gone. **Why:** shipping a Calendar API integration in production mode
-requires Google's OAuth app verification, which requires business/billing
-verification on the Cloud project — unavailable in this setup, and the
-"unverified app, 100 test users" cap doesn't cover a real deployment. An
-external approval blocker, not a code problem.
+APScheduler periodically identifies expired holds and changes their status to `EXPIRED`. Availability queries additionally evaluate `expires_at`, ensuring expired holds do not remain logically unavailable even if the scheduled cleanup task has not yet executed.
 
-**Replacement:** `app/integrations/calendar.py` builds a standard `.ics`
-file (RFC 5545) locally — pure string formatting, no network call, so it
-can't fail the way an API call can — attached to the same email the
-booking/reschedule/cancellation flow already sends. `Notification` carries
-`attachment_filename`/`attachment_content`/`ics_method` alongside its
-existing retry/backoff machinery, so there's no separate delivery path. A
-reschedule reuses the original appointment's id as the calendar UID with
-an incremented `SEQUENCE`, so a compliant client updates the existing
-event instead of duplicating it; cancellation sends `METHOD:CANCEL` on
-the same UID.
+---
 
-**Trade-off:** one-way, point-in-time — the patient's calendar reflects
-the appointment as of when they opened the invite, not pushed live
-afterward. Traded for zero external dependencies and no approval process.
+## D. Transaction Boundaries and External Service Isolation
 
-Together these patterns ensure that **the primary healthcare workflow —
-book, hold, confirm, visit, follow-up — is always available even when every
-external system is degraded.**
+SmartCare follows a **transaction-first, asynchronous-processing** model.
+
+The appointment transaction is responsible only for durable application state, including the appointment, hold transition, and related database records. The transaction is committed before external integrations are invoked.
+
+The resulting flow is:
+
+```text
+Validate Request
+      │
+      ▼
+PostgreSQL Transaction
+      │
+      ├── Validate Slot
+      ├── Validate Hold
+      ├── Create/Update Appointment
+      └── Commit
+             │
+             ▼
+      Background Processing
+        ├── Email
+        └── AI Generation
+```
+
+This prevents failures in external services from rolling back successful appointment transactions.
+
+---
+
+## E. Notification Processing and Retry Strategy
+
+SmartCare persists notifications in the `notifications` table before delivery. Notifications initially use `PENDING` status and are processed asynchronously through the configured SMTP service.
+
+The notification worker selects records whose status is `PENDING` or `RETRY` and whose `next_retry_at` has been reached.
+
+Transient delivery failures use exponential retry intervals:
+
+| Attempt | Retry Delay |
+| ------- | ----------: |
+| 1       |    1 minute |
+| 2       |   5 minutes |
+| 3       |  15 minutes |
+
+After `NOTIFICATION_MAX_RETRIES`, the notification is marked `FAILED`. If SMTP is not configured or unavailable at the configuration level, the notification is marked `UNAVAILABLE`.
+
+Notification failure does not modify the associated appointment or other transactional records.
+
+---
+
+## F. AI-Assisted Processing
+
+SmartCare integrates **OpenAI** for AI-assisted functionality using the configured model:
+
+`openai/gpt-oss-20b`
+
+AI processing is asynchronous and isolated from transactional appointment operations. Provider failures, authentication errors, timeouts, malformed responses, and other processing exceptions are captured in the `ai_summaries` table.
+
+Each AI result maintains an explicit processing status such as `PENDING`, `COMPLETED`, `FAILED`, or `UNAVAILABLE`.
+
+The system always retains the original patient-provided symptoms independently of AI processing. AI output is therefore an assistive layer and does not replace the original clinical information.
+
+---
+
+## G. Application Calendar
+
+SmartCare includes a **native calendar module within the application**.
+
+The calendar uses appointment data persisted in PostgreSQL as its source of truth. Appointment creation, confirmation, rescheduling, cancellation, and completion are reflected in the application's calendar interface.
+
+No external calendar provider, OAuth flow, third-party calendar API, or external synchronization service is required.
+
+This design keeps scheduling and calendar state within the SmartCare platform and eliminates an additional external dependency from the core appointment workflow.
+
+---
+
+## H. Reliability and Consistency Model
+
+The system separates **transactional responsibilities** from **non-critical external processing**.
+
+PostgreSQL provides durable and consistent storage for users, appointments, holds, doctor leaves, clinical records, notifications, AI summaries, medication reminders, waitlist entries, and audit logs. Database constraints, transactions, and row-level locking protect critical scheduling operations.
+
+APScheduler handles time-based background operations, while asynchronous workers process notifications and AI tasks independently.
+
+Consequently, temporary failures of SMTP, OpenAI, or background processing do not compromise the integrity of the core healthcare workflow:
+
+**Availability → Hold → Confirmation → Consultation → Follow-up**
+
+The architecture prioritizes **data consistency, concurrency safety, fault isolation, and continued availability of core clinical operations**.
