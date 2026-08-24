@@ -31,7 +31,7 @@ store from MongoDB to PostgreSQL. See `docs/system-design.md`.
 List/Calendar toggle with confirmed appointments and leave days blocked out.
 
 ### Patient — Appointments
-![Patient appointments](docs/screenshots/patient-appointments.png)
+<img width="1919" height="912" alt="image" src="https://github.com/user-attachments/assets/317252de-4660-47e8-abb3-1824ac631216" />
 Color-coded calendar view across all of a patient's doctors.
 
 ### Booking flow — symptom intake
@@ -65,6 +65,7 @@ Auth: bcrypt + JWT (HS256)
 Jobs: APScheduler (preview) / Celery + Redis (production, see `docker-compose.yml`)
 LLM: httpx-based provider-agnostic adapter (Anthropic, OpenAI-compatible, Emergent)
 Calendar: standard-library .ics generation (RFC 5545) — no external service
+Mail Integration: mailtrap.io
 
 ## Folder structure
 
