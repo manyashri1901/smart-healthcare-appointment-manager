@@ -27,7 +27,8 @@ store from MongoDB to PostgreSQL. See `docs/system-design.md`.
 ## Screenshots
 
 ### Doctor — Schedule (Calendar view)
-<img width="1919" height="910" alt="image" src="https://github.com/user-attachments/assets/18554552-d378-4132-8193-168c592b9476" />
+<img width="1919" height="900" alt="image" src="https://github.com/user-attachments/assets/f854c7da-cf2e-42f1-849f-e046e5d06bac" />
+
 List/Calendar toggle with confirmed appointments and leave days blocked out.
 
 ### Patient — Appointments
