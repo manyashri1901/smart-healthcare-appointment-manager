@@ -4,10 +4,6 @@ Production-style appointment platform with three portals (Patient, Doctor,
 Admin), safe concurrent booking, provider-agnostic AI summaries, medication
 reminders, transactional email, and a built-in in-app calendar.
 
-## Demo
-
-- **Live App**: _add Vercel URL here after deployment_
-- **Demo Video**: _add Google Drive link here after recording_
 
 ## Architecture
 
